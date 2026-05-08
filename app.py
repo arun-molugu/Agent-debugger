@@ -273,4 +273,4 @@ if st.button("Analyze Trace", type="primary"):
                 st.markdown(raw)
 
 st.divider()
-st.caption("Built by Dhruva | AI Agent Observability")
+st.caption("Built by Arun | AI Agent Observability")
