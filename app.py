@@ -55,11 +55,11 @@ def parse_raw_json_trace(raw_input):
                         "role": "tool",
                         "content": json.dumps(tool_output) if status == "success" else f"error: {json.dumps(tool_output)}"
                     })
-            elif step_type == "memory_lookup":
-                messages.append({
-                    "role": "tool",
-                    "content": json.dumps(s.get("output", {}))
-                })
+                elif step_type == "memory_lookup":
+                    messages.append({
+                        "role": "tool",
+                        "content": json.dumps(s.get("output", {}))
+                    })
         # Add final output as agent message
         final = parsed.get("final_output", {})
         if final:
