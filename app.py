@@ -31,30 +31,30 @@ def parse_raw_json_trace(raw_input):
 
     if isinstance(parsed, dict):
         if "trace" in parsed:
-        messages = parsed["trace"]
-    elif "steps" in parsed:
+            messages = parsed["trace"]
+        elif "steps" in parsed:
         # Structured observability format
-        messages = []
-        for s in parsed["steps"]:
-            step_type = s.get("type", "")
-            status = s.get("status", "")
-            if step_type == "reasoning":
-                messages.append({
+            messages = []
+            for s in parsed["steps"]:
+                step_type = s.get("type", "")
+                status = s.get("status", "")
+                if step_type == "reasoning":
+                    messages.append({
                     "role": "assistant",
                     "content": s.get("thought", "") or str(s.get("output", ""))
-                })
-            elif step_type == "tool_call":
-                tool_name = s.get("tool", {}).get("name", "tool")
-                tool_input = s.get("input", {})
-                tool_output = s.get("output", {})
-                messages.append({
+                    })
+                elif step_type == "tool_call":
+                    tool_name = s.get("tool", {}).get("name", "tool")
+                    tool_input = s.get("input", {})
+                    tool_output = s.get("output", {})
+                    messages.append({
                     "role": "assistant",
                     "tool_call": f"{tool_name}({json.dumps(tool_input)})"
-                })
-                messages.append({
+                    })
+                    messages.append({
                     "role": "tool",
                     "content": json.dumps(tool_output) if status == "success" else f"error: {json.dumps(tool_output)}"
-                })
+                    })
             elif step_type == "memory_lookup":
                 messages.append({
                     "role": "tool",
