@@ -67,8 +67,7 @@ def parse_raw_json_trace(raw_input):
                 "role": "assistant",
                 "content": final.get("response_summary", str(final))
             })
-    else:
-        messages = [parsed]
+  
     elif isinstance(parsed, list):
         messages = parsed
     else:
