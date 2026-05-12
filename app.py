@@ -48,12 +48,12 @@ def parse_raw_json_trace(raw_input):
                     tool_input = s.get("input", {})
                     tool_output = s.get("output", {})
                     messages.append({
-                    "role": "assistant",
-                    "tool_call": f"{tool_name}({json.dumps(tool_input)})"
+                        "role": "assistant",
+                        "tool_call": f"{tool_name}({json.dumps(tool_input)})"
                     })
                     messages.append({
-                    "role": "tool",
-                    "content": json.dumps(tool_output) if status == "success" else f"error: {json.dumps(tool_output)}"
+                        "role": "tool",
+                        "content": json.dumps(tool_output) if status == "success" else f"error: {json.dumps(tool_output)}"
                     })
             elif step_type == "memory_lookup":
                 messages.append({
