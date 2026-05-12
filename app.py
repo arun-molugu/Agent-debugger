@@ -30,7 +30,7 @@ def parse_raw_json_trace(raw_input):
         parsed = raw_input
 
     if isinstance(parsed, dict):
-    if "trace" in parsed:
+        if "trace" in parsed:
         messages = parsed["trace"]
     elif "steps" in parsed:
         # Structured observability format
