@@ -8,7 +8,15 @@ st.set_page_config(page_title="Agent Debugger", page_icon="🔍", layout="wide")
 st.title("🔍 Agent Debugger")
 st.write("Paste any agent execution trace — raw JSON or line format — to get an instant debugging report.")
 
-api_key = st.text_input("OpenAI API Key", type="password", placeholder="sk-...")
+# ─────────────────────────────────────────
+# API KEY FROM BACKEND — no user input needed
+# ─────────────────────────────────────────
+try:
+    api_key = st.secrets["OPENAI_API_KEY"]
+except Exception:
+    st.error("API key not configured. Please add OPENAI_API_KEY to Streamlit secrets.")
+    st.stop()
+
 trace_input = st.text_area("Paste agent trace here", height=250)
 
 
@@ -33,15 +41,15 @@ def parse_raw_json_trace(raw_input):
         if "trace" in parsed:
             messages = parsed["trace"]
         elif "steps" in parsed:
-        # Structured observability format
+            # Structured observability format
             messages = []
             for s in parsed["steps"]:
                 step_type = s.get("type", "")
                 status = s.get("status", "")
                 if step_type == "reasoning":
                     messages.append({
-                    "role": "assistant",
-                    "content": s.get("thought", "") or str(s.get("output", ""))
+                        "role": "assistant",
+                        "content": s.get("thought", "") or str(s.get("output", ""))
                     })
                 elif step_type == "tool_call":
                     tool_name = s.get("tool", {}).get("name", "tool")
@@ -60,14 +68,14 @@ def parse_raw_json_trace(raw_input):
                         "role": "tool",
                         "content": json.dumps(s.get("output", {}))
                     })
-        # Add final output as agent message
-        final = parsed.get("final_output", {})
-        if final:
-            messages.append({
-                "role": "assistant",
-                "content": final.get("response_summary", str(final))
-            })
-  
+            final = parsed.get("final_output", {})
+            if final:
+                messages.append({
+                    "role": "assistant",
+                    "content": final.get("response_summary", str(final))
+                })
+        else:
+            messages = [parsed]
     elif isinstance(parsed, list):
         messages = parsed
     else:
@@ -110,7 +118,7 @@ def parse_raw_json_trace(raw_input):
 
 
 # ─────────────────────────────────────────
-# SMART ENTRY POINT — tries JSON first
+# SMART ENTRY POINT
 # ─────────────────────────────────────────
 def parse_trace(trace_input):
     trace_input = trace_input.strip()
@@ -119,7 +127,6 @@ def parse_trace(trace_input):
     except Exception:
         pass
 
-    # Line-by-line fallback
     steps = []
     for i, line in enumerate(trace_input.split("\n")):
         line = line.strip()
@@ -309,7 +316,7 @@ def detect_pattern(failures):
             "affected_steps": steps_affected,
             "unique_failure_points": len(steps_affected),
             "total_instances": len(failures),
-            "root_fix": "Enforce tool output verification before any user-facing confirmation. Agent must never confirm success without explicit tool success signal."
+            "root_fix": "Enforce tool output verification before any user-facing confirmation."
         }
     if action_skipped_count >= 1:
         return {
@@ -368,24 +375,37 @@ def compute_score(failures, pattern):
 
 
 # ─────────────────────────────────────────
-# PROMPT BUILDER
+# PROMPT BUILDER — sends only anomalies to LLM
+# not the full trace, cuts cost and latency
 # ─────────────────────────────────────────
-def build_prompt(steps, failures, trace, score, breakdown):
+def build_prompt(steps, failures, score, breakdown):
+    # Only send failed steps to LLM, not entire trace
+    MAX_CHARS = 12000
+    failed_step_numbers = set(f["step"] for f in failures)
+    
+    if failed_step_numbers:
+        relevant_steps = [s for s in steps if s["step"] in failed_step_numbers
+                         or s["step"] in {n-1 for n in failed_step_numbers}
+                         or s["step"] in {n+1 for n in failed_step_numbers}]
+    else:
+        relevant_steps = steps
+
+    steps_str = json.dumps(relevant_steps)[:MAX_CHARS]
+    failures_str = json.dumps(failures)[:MAX_CHARS]
+
     return f"""
 You are an AI agent debugging engine.
 Return valid JSON only. No markdown. No commentary.
 
-Parsed Steps: {steps}
-Detected Failures: {failures}
-Original Trace: {trace}
+Relevant Steps (around failure points only): {steps_str}
+Detected Failures: {failures_str}
 
 CRITICAL RULES:
 - reliability_score is FIXED at {score}. Do not change it.
 - score_breakdown is FIXED at {breakdown}. Do not change it.
 - If tool output directly contradicts agent response, confirmed cause must state the contradiction explicitly.
 - Hallucination severity is always critical when agent produces false user-facing output.
-- Tool misuse severity is always critical when agent ignores a tool failure causing false output.
-- Use exact quotes from trace as evidence.
+- Use exact quotes from steps as evidence.
 - overall_confidence above 0.8 if contradiction is obvious.
 - Quick fix must be implementable in under 1 hour.
 - Robust fix must be a systemic architectural solution.
@@ -394,15 +414,15 @@ CRITICAL RULES:
 FAILURE DETECTION GUIDANCE:
 
 1. MISSING TOOL CALL (action_skipped):
-   Example: Agent says "I've booked Capsule Inn" but no book_hotel() tool was called.
+   Agent says booking complete but no booking tool was called.
    Diagnosis: root_cause=missing_tool_call, failure_type=action_skipped, severity=critical
 
 2. CALCULATION ERROR:
-   Example: Tool returns price=150, tax=0.1. Agent says total is $155 (correct is $165).
+   Tool returns price=150, tax=0.1. Agent says total is $155 (correct is $165).
    Diagnosis: root_cause=logic_failure, failure_type=calculation_error, severity=high
 
 3. DATE MISINTERPRETATION:
-   Example: Tool returns scheduled_for=2024-12-05 but agent confirms May 12th to user.
+   Tool returns scheduled_for=2024-12-05 but agent confirms May 12th to user.
    Diagnosis: root_cause=logic_failure, failure_type=date_misinterpretation, severity=high
 
 Schema:
@@ -429,8 +449,8 @@ Schema:
 # MAIN ANALYZE BUTTON
 # ─────────────────────────────────────────
 if st.button("Analyze Trace", type="primary"):
-    if not api_key or not trace_input:
-        st.error("Please add your API key and paste a trace.")
+    if not trace_input:
+        st.error("Please paste a trace.")
     else:
         with st.spinner("Analyzing trace..."):
             steps = parse_trace(trace_input)
@@ -441,11 +461,11 @@ if st.button("Analyze Trace", type="primary"):
                 failures = detect_failures(steps)
                 pattern = detect_pattern(failures)
                 score, breakdown = compute_score(failures, pattern)
-                prompt = build_prompt(steps, failures, trace_input, score, breakdown)
+                prompt = build_prompt(steps, failures, score, breakdown)
 
                 client = OpenAI(api_key=api_key)
                 response = client.chat.completions.create(
-                    model="gpt-4o",
+                    model="gpt-4o-mini",
                     messages=[{"role": "user", "content": prompt}]
                 )
 
@@ -459,7 +479,7 @@ if st.button("Analyze Trace", type="primary"):
                 try:
                     parsed = json.loads(raw)
 
-                    # Adjust score for failures GPT-4o caught that Layer 1 missed
+                    # Adjust score for failures GPT-4o-mini caught that Layer 1 missed
                     gpt_failures = parsed.get("failures", [])
                     layer1_types = [f.get("failure_type") for f in failures]
                     gpt_only_failures = [f for f in gpt_failures if f.get("failure_type") not in layer1_types]
@@ -512,11 +532,11 @@ if st.button("Analyze Trace", type="primary"):
                     # ── CONFIDENCE ──
                     confidence = parsed.get("overall_confidence", 0.0)
                     st.subheader("📈 Overall Confidence")
-                    st.progress(confidence)
+                    st.progress(float(confidence))
                     st.markdown(f"{confidence:.2f} / 1.0")
 
                 except json.JSONDecodeError:
-                    st.error("Failed to parse GPT-4o response. Raw output:")
+                    st.error("Failed to parse response. Raw output:")
                     st.markdown(raw)
 
 st.divider()
