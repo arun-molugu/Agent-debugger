@@ -870,6 +870,7 @@ if st.button("Analyze Trace", type="primary"):
                     # Adjust score for GPT-4o-mini findings Layer 1 missed
                     gpt_failures = parsed.get("failures", [])
                     layer1_types = [f.get("failure_type") for f in all_failures]
+                    st.write(f"DEBUG Layer1 types: {layer1_types}")
                     gpt_only_failures = [f for f in gpt_failures if f.get("failure_type") not in layer1_types]
                     for gf in gpt_only_failures:
                         severity = gf.get("severity", "medium")
