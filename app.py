@@ -886,10 +886,6 @@ if st.button("Analyze Trace", type="primary"):
                     else:
                         st.progress(float(confidence))
                         st.markdown(f"{confidence:.2f} / 1.0")
-                        
-                    else:
-                        st.progress(float(confidence))
-                        st.markdown(f"{confidence:.2f} / 1.0")
                     
                     
                     
