@@ -73,7 +73,7 @@ def parse_raw_json_trace(raw_input):
                     messages.append({
                         "role": "tool",
                         "content": json.dumps(tool_output) if status == "success" else f"error: {json.dumps(tool_output)}",
-                        "duration_ms": duration_ms,
+                        "duration_ms": none,
                         "step_type": step_type
                     })
                 elif step_type == "memory_lookup":
@@ -380,7 +380,7 @@ def extract_metrics_insights(metrics):
     if cost:
         cost_1k = round(cost * 1000, 2)
         cost_10k = round(cost * 10000, 2)
-        insights.append(f"💰 Cost per query: ${cost:.4f} → ${cost_1k} per 1K queries → ${cost_10k} per 10K queries")
+        insights.append(f"💰 Cost per query: **${cost:.4f}** → **${cost_1k}** per 1K queries → **${cost_10k}** per 10K queries")
         if cost > 0.05:
             insights.append(f"⚠️ High cost per query — consider prompt compression or caching repeated tool calls")
 
@@ -867,13 +867,20 @@ if st.button("Analyze Trace", type="primary"):
                         for signal in signals:
                             st.markdown(f"- {signal}")
 
+
                     # ── CONFIDENCE ──
                     confidence = parsed.get("overall_confidence", 0.0)
                     st.subheader("📈 Overall Confidence")
-                    st.progress(float(confidence))
-                    st.markdown(f"{confidence:.2f} / 1.0")
+                    if confidence == 0.0 and not parsed.get("failures"):
+                        st.info("N/A — performance issues only, no logical failures detected")
+                    else:
+                        st.progress(float(confidence))
+                        st.markdown(f"{confidence:.2f} / 1.0")
+                    
+                    
+                    
 
-                except json.JSONDecodeError:
+             except json.JSONDecodeError:
                     st.error("Failed to parse response. Raw output:")
                     st.markdown(raw)
 
