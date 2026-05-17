@@ -40,8 +40,10 @@ def parse_raw_json_trace(raw_input):
 
     # Extract metrics if present at top level
     metrics = None
+    top_level_errors = []
     if isinstance(parsed, dict):
         metrics = parsed.get("metrics", None)
+        top_level_errors = parsed.get("errors", [])
 
     if isinstance(parsed, dict):
         if "trace" in parsed:
@@ -83,6 +85,34 @@ def parse_raw_json_trace(raw_input):
                         "duration_ms": duration_ms,
                         "step_type": step_type
                     })
+                else:
+                    # Unknown step type — check status and surface failures
+                    output = s.get("output", {})
+                    if status == "failure":
+                        failure_reason = output.get("failure_reason", str(output))
+                        messages.append({
+                            "role": "tool",
+                            "content": f"error: {failure_reason}",
+                            "duration_ms": duration_ms,
+                            "step_type": step_type
+                        })
+                    else:
+                        messages.append({
+                            "role": "tool",
+                            "content": json.dumps(output),
+                            "duration_ms": duration_ms,
+                            "step_type": step_type
+                        })
+            # Inject top level errors as tool failure steps
+            for err in top_level_errors:
+                messages.append({
+                    "role": "tool",
+                    "content": f"error: [{err.get('code', 'ERROR')}] {err.get('message', '')}",
+                    "duration_ms": None,
+                    "step_type": "system_error",
+                    "severity": err.get("severity", "high")
+                })
+                    
 
             final = parsed.get("final_output", {})
             if final:
@@ -549,7 +579,7 @@ def detect_failures(steps):
                     failures.append(num_mismatch)
 
             # Missing tool call
-            if any(word in content_lower for word in BOOKING_CLAIMS):
+            if any(word in content_lower for word in BOOKING_CLAIMS)and step.get("step_type") in [None, "final"]:
                 booking_tool_found = any(
                     s["actor"] == "tool" and s["step"] < step["step"]
                     for s in steps
