@@ -789,7 +789,7 @@ if st.button("Analyze Trace", type="primary"):
 
                 response = client.chat.completions.create(
                     model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": prompt}]
+                    messages=[{"role": "user", "content": prompt}],
                     temperature=0
 
                 )
