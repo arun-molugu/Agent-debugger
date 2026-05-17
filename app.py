@@ -239,33 +239,35 @@ def detect_numerical_mismatch(tool_content, agent_content, step_num):
     if not tool_numbers or not agent_numbers:
         return None
 
-    # Check each number from tool output against agent output
     for tool_num in tool_numbers:
         tool_val = float(tool_num)
-        # Skip trivial numbers like 0, 1, step IDs
-        if abs(tool_val) < 2:
+        # Skip trivial numbers
+        if abs(tool_val) < 10:
             continue
-        # Check if this number appears correctly in agent output
-        found_match = any(
-            abs(float(agent_num) - tool_val) < 0.01
-            for agent_num in agent_numbers
-            if agent_num
+        # Skip numbers that don't appear in agent response at all
+        # Only flag when agent uses a DIFFERENT number for the same value
+        agent_vals = [float(n) for n in agent_numbers if n]
+        agent_mentions_similar = any(
+            abs(av - tool_val) < tool_val * 0.5
+            for av in agent_vals
+            if abs(av) > 10
         )
-        if not found_match:
-            # Check if a different number appears that could be a distortion
-            close_mismatch = any(
-                abs(float(agent_num) - tool_val) > 0.01
-                and abs(float(agent_num)) > 2
-                for agent_num in agent_numbers
-                if agent_num
+        if not agent_mentions_similar:
+            continue
+        # Agent mentioned a similar but not identical number — that's a mismatch
+        exact_match = any(abs(av - tool_val) < 0.01 for av in agent_vals)
+        if not exact_match:
+            mismatched_val = next(
+                (av for av in agent_vals if abs(av - tool_val) < tool_val * 0.5),
+                None
             )
-            if close_mismatch:
+            if mismatched_val:
                 return {
                     "root_cause": "data_distortion",
                     "failure_type": "numerical_mismatch",
                     "step": step_num,
                     "severity": "critical",
-                    "description": f"Agent reported a different number than tool returned. Tool had {tool_num} but agent used a different value.",
+                    "description": f"Agent reported {mismatched_val} but tool returned {tool_num}.",
                     "evidence": agent_content[:300],
                     "contradicted_by": f"Tool returned: {tool_num}"
                 }
@@ -507,24 +509,35 @@ def detect_failures(steps):
 
             # Contradiction: success after tool error
             if last_tool_error and claims_success:
-                failures.append({
-                    "root_cause": "contradiction",
-                    "failure_type": "hallucination",
-                    "step": step["step"],
-                    "severity": "critical",
-                    "description": "Agent claimed success after a tool failure",
-                    "evidence": content,
-                    "contradicted_by": last_tool_error["content"]
-                })
-                failures.append({
-                    "root_cause": "contradiction",
-                    "failure_type": "tool_misuse",
-                    "step": step["step"],
-                    "severity": "high",
-                    "description": "Agent ignored tool failure and proceeded anyway",
-                    "evidence": content,
-                    "contradicted_by": last_tool_error["content"]
-                })
+                # Check if this is a hallucinated retry — more specific diagnosis
+                RETRY_SUCCESS_CLAIMS = [
+                    "retry succeeded", "retried successfully",
+                    "retry was successful", "attempt succeeded",
+                    "succeeded after retry", "resolved after retry"
+                ]
+                is_hallucinated_retry = any(
+                    claim in content_lower for claim in RETRY_SUCCESS_CLAIMS
+                )
+                if not is_hallucinated_retry:
+                    failures.append({
+                        "root_cause": "contradiction",
+                        "failure_type": "hallucination",
+                        "step": step["step"],
+                        "severity": "critical",
+                        "description": "Agent claimed success after a tool failure",
+                        "evidence": content,
+                        "contradicted_by": last_tool_error["content"]
+                    })
+                    failures.append({
+                        "root_cause": "contradiction",
+                        "failure_type": "tool_misuse",
+                        "step": step["step"],
+                        "severity": "high",
+                        "description": "Agent ignored tool failure and proceeded anyway",
+                        "evidence": content,
+                        "contradicted_by": last_tool_error["content"]
+                    })
+
 
             # Numerical mismatch — always critical
             if last_tool_content:
