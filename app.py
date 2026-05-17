@@ -478,6 +478,10 @@ def detect_failures(steps):
             date_match = re.search(r'scheduled_for[^0-9]*(\d{4}-\d{2}-\d{2})', content)
             if date_match:
                 last_scheduled_date = date_match.group(1)
+            # Also catch MM/DD/YYYY and DD/MM/YYYY formats
+            date_match_alt = re.search(r'scheduled_for[^0-9]*(\d{2}[/-]\d{2}[/-]\d{4})', content)
+            if date_match_alt and not last_scheduled_date:
+                last_scheduled_date = date_match_alt.group(1)
 
         elif actor == "agent":
             claims_success = any(word in content_lower for word in SUCCESS_CLAIMS)
@@ -556,6 +560,31 @@ def detect_failures(steps):
                         "description": "Agent appears to be retrying repeatedly",
                         "evidence": content
                     })
+                # Hallucinated retry — agent claims retry succeeded but
+                # no actual retry tool call exists after the error
+                RETRY_SUCCESS_CLAIMS = [
+                    "retry succeeded", "retried successfully", 
+                    "retry was successful", "attempt succeeded",
+                    "succeeded after retry", "resolved after retry"
+                ]
+                if any(claim in content_lower for claim in RETRY_SUCCESS_CLAIMS):
+                    # Check if any tool call actually happened after the last error
+                    last_error_step = last_tool_error["step"] if last_tool_error else 0
+                    retry_tool_found = any(
+                        s["actor"] == "tool" and s["step"] > last_error_step
+                        for s in steps
+                        if s["step"] < step["step"]
+                    )
+                    if not retry_tool_found:
+                        failures.append({
+                            "root_cause": "contradiction",
+                            "failure_type": "hallucinated_retry",
+                            "step": step["step"],
+                            "severity": "critical",
+                            "description": "Agent claimed retry succeeded but no retry tool call exists after the error",
+                            "evidence": content,
+                            "contradicted_by": last_tool_error["content"] if last_tool_error else "No retry tool call found"
+                        })
             else:
                 retry_count = 0
 
