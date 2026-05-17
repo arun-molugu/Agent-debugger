@@ -390,7 +390,7 @@ def detect_latency_issues(steps):
 
         durations = [d for _, d in entries]
         avg_duration = sum(durations) / len(durations)
-        expected_max = EXPECTED_MAX_MS.get(step_type, 1000)
+        expected_max = EXPECTED_MAX_MS.get(step_type, 10000)
 
         for step_num, duration in entries:
             is_outlier = len(durations) > 1 and duration > avg_duration * 1.5  # tightened from 2x
