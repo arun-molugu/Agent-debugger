@@ -152,24 +152,44 @@ def parse_trace(trace_input):
         pass
 
     steps = []
-    for i, line in enumerate(trace_input.split("\n")):
-        line = line.strip()
-        if not line or ":" not in line:
+    lines = trace_input.split("\n")
+    i = 0
+    step_num = 1
+    while i < len(lines):
+        line = lines[i].strip()
+        if not line:
+            i += 1
             continue
-        actor, content = line.split(":", 1)
-        actor = actor.strip().lower()
-        content = content.strip()
+        if ":" not in line:
+            i += 1
+            continue
+        first_colon = line.index(":")
+        actor = line[:first_colon].strip().lower()
+        content = line[first_colon+1:].strip()
         if actor not in ["user", "agent", "tool"]:
+            i += 1
             continue
+        # If content starts with { collect multiline JSON
+        if content.startswith("{"):
+            json_lines = [content]
+            i += 1
+            while i < len(lines):
+                next_line = lines[i].strip()
+                json_lines.append(next_line)
+                if next_line == "}":
+                    break
+                i += 1
+            content = " ".join(json_lines)
         steps.append({
-            "step": i + 1,
+            "step": step_num,
             "actor": actor,
             "content": content,
             "duration_ms": None,
             "step_type": None
         })
+        step_num += 1
+        i += 1
     return steps, None
-
 
 # ─────────────────────────────────────────
 # SEMANTIC CHECKER
