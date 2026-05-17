@@ -381,7 +381,7 @@ def extract_metrics_insights(metrics):
     if cost:
         cost_1k = round(cost * 1000, 2)
         cost_10k = round(cost * 10000, 2)
-        insights.append(f"💰 Cost per query: ${cost:.4f} → ${cost_1k} per 1K queries → ${cost_10k} per 10K queries")
+        insights.append(f"💰 Cost per query: USD {cost:.4f} → USD {cost_1k} per 1K queries → USD {cost_10k} per 10K queries")
         if cost > 0.05:
             insights.append(f"⚠️ High cost per query — consider prompt compression or caching repeated tool calls")
 
