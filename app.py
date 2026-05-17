@@ -601,7 +601,6 @@ def detect_failures(steps):
                     "succeeded after retry", "resolved after retry"
                 ]
                 if is_hallucinated_retry:
-                    st.write(f"DEBUG: last_tool_error_step={last_tool_error_step}, current_step={step['step']}, is_hallucinated_retry={is_hallucinated_retry}")
                     # Check if any tool call actually happened after the last error
                     retry_tool_found = any(
                         s["actor"] == "tool" 
@@ -870,7 +869,6 @@ if st.button("Analyze Trace", type="primary"):
                     # Adjust score for GPT-4o-mini findings Layer 1 missed
                     gpt_failures = parsed.get("failures", [])
                     layer1_types = [f.get("failure_type") for f in all_failures]
-                    st.write(f"DEBUG Layer1 types: {layer1_types}")
                     gpt_only_failures = [f for f in gpt_failures if f.get("failure_type") not in layer1_types]
                     for gf in gpt_only_failures:
                         severity = gf.get("severity", "medium")
@@ -912,12 +910,30 @@ if st.button("Analyze Trace", type="primary"):
 
                     # ── FAILURES ──
                     st.subheader("📍 Failures Detected")
-                    if not parsed.get("failures"):
+                    if not all_failures and not parsed.get("failures"):
                         st.success("No failures detected.")
+
+                    # Show Layer 1 failures first — deterministic and authoritative
+                    shown_types = set()
+                    for f in all_failures:
+                        ftype = f.get("failure_type", "unknown").upper()
+                        severity = f.get("severity", "").upper()
+                        color = "🔴" if severity == "CRITICAL" else "🟡" if severity == "HIGH" else "🔵"
+                        st.markdown(f"{color} **{ftype}** — Step {f.get('step','?')} — {severity}")
+                        st.markdown(f"*Evidence:* {f.get('evidence','')[:200]}")
+                        if f.get('contradicted_by'):
+                            st.markdown(f"*Contradicted by:* {f.get('contradicted_by','')[:200]}")
+                        shown_types.add(f.get("failure_type"))
+                        st.divider()
+
+                    # Show GPT-4o-mini failures only if not already caught by Layer 1
                     for f in parsed.get("failures", []):
                         fp = f.get("failure_point", {})
+                        ftype_raw = f.get("failure_type", "unknown")
+                        if ftype_raw in shown_types:
+                            continue
                         severity = f.get("severity", "").upper()
-                        ftype = f.get("failure_type", "").upper()
+                        ftype = ftype_raw.upper()
                         color = "🔴" if severity == "CRITICAL" else "🟡" if severity == "HIGH" else "🔵"
                         st.markdown(f"{color} **{ftype}** — Step {fp.get('step','?')} — {severity}")
                         st.markdown(f"*Evidence:* {fp.get('evidence','')}")
@@ -925,8 +941,8 @@ if st.button("Analyze Trace", type="primary"):
                         fix = f.get("suggested_fix", {})
                         st.markdown(f"⚡ **Quick fix:** {fix.get('quick','')}")
                         st.markdown(f"🏗️ **Robust fix:** {fix.get('robust','')}")
+                        shown_types.add(ftype_raw)
                         st.divider()
-
                     # ── DEBUGGING SIGNALS ──
                     signals = parsed.get("debugging_signals", [])
                     if signals:
