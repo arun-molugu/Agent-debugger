@@ -506,18 +506,17 @@ def detect_failures(steps):
 
         elif actor == "agent":
             claims_success = any(word in content_lower for word in SUCCESS_CLAIMS)
+            RETRY_SUCCESS_CLAIMS = [
+                "retry succeeded", "retried successfully",
+                "retry was successful", "attempt succeeded",
+                "succeeded after retry", "resolved after retry"
+            ]
+            is_hallucinated_retry = any(
+                claim in content_lower for claim in RETRY_SUCCESS_CLAIMS
+            )
 
             # Contradiction: success after tool error
             if last_tool_error and claims_success:
-                # Check if this is a hallucinated retry — more specific diagnosis
-                RETRY_SUCCESS_CLAIMS = [
-                    "retry succeeded", "retried successfully",
-                    "retry was successful", "attempt succeeded",
-                    "succeeded after retry", "resolved after retry"
-                ]
-                is_hallucinated_retry = any(
-                    claim in content_lower for claim in RETRY_SUCCESS_CLAIMS
-                )
                 if not is_hallucinated_retry:
                     failures.append({
                         "root_cause": "contradiction",
