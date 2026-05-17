@@ -874,8 +874,19 @@ if st.button("Analyze Trace", type="primary"):
                     # ── CONFIDENCE ──
                     confidence = parsed.get("overall_confidence", 0.0)
                     st.subheader("📈 Overall Confidence")
-                    if confidence == 0.0 and not parsed.get("failures"):
+                    logical_failure_types = ["hallucination", "tool_misuse", "action_skipped", 
+                          "date_misinterpretation", "numerical_mismatch", 
+                          "self_contradiction", "context_drop", "calculation_error"]
+                    has_logical_failures = any(
+                         f.get("failure_type") in logical_failure_types 
+                         for f in parsed.get("failures", [])
+                    )
+                    if confidence == 0.0 and not has_logical_failures:
                         st.info("N/A — performance issues only, no logical failures detected")
+                    else:
+                        st.progress(float(confidence))
+                        st.markdown(f"{confidence:.2f} / 1.0")
+                        
                     else:
                         st.progress(float(confidence))
                         st.markdown(f"{confidence:.2f} / 1.0")
