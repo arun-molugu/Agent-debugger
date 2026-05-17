@@ -9,7 +9,7 @@ st.title("🔍 Agent Debugger")
 st.write("Paste any agent execution trace — raw JSON or line format — to get an instant debugging report.")
 
 # ─────────────────────────────────────────
-# API KEY FROM BACKEND — no user input needed
+# API KEY FROM BACKEND
 # ─────────────────────────────────────────
 try:
     api_key = st.secrets["OPENAI_API_KEY"]
@@ -17,6 +17,7 @@ except Exception:
     st.error("API key not configured. Please add OPENAI_API_KEY to Streamlit secrets.")
     st.stop()
 
+client = OpenAI(api_key=api_key)
 trace_input = st.text_area("Paste agent trace here", height=250)
 
 
@@ -41,15 +42,19 @@ def parse_raw_json_trace(raw_input):
         if "trace" in parsed:
             messages = parsed["trace"]
         elif "steps" in parsed:
-            # Structured observability format
             messages = []
-            for s in parsed["steps"]:
+            raw_steps = parsed["steps"]
+            for s in raw_steps:
                 step_type = s.get("type", "")
                 status = s.get("status", "")
+                duration_ms = s.get("duration_ms", None)
+
                 if step_type == "reasoning":
                     messages.append({
                         "role": "assistant",
-                        "content": s.get("thought", "") or str(s.get("output", ""))
+                        "content": s.get("thought", "") or str(s.get("output", "")),
+                        "duration_ms": duration_ms,
+                        "step_type": step_type
                     })
                 elif step_type == "tool_call":
                     tool_name = s.get("tool", {}).get("name", "tool")
@@ -57,22 +62,31 @@ def parse_raw_json_trace(raw_input):
                     tool_output = s.get("output", {})
                     messages.append({
                         "role": "assistant",
-                        "tool_call": f"{tool_name}({json.dumps(tool_input)})"
+                        "tool_call": f"{tool_name}({json.dumps(tool_input)})",
+                        "duration_ms": duration_ms,
+                        "step_type": step_type
                     })
                     messages.append({
                         "role": "tool",
-                        "content": json.dumps(tool_output) if status == "success" else f"error: {json.dumps(tool_output)}"
+                        "content": json.dumps(tool_output) if status == "success" else f"error: {json.dumps(tool_output)}",
+                        "duration_ms": duration_ms,
+                        "step_type": step_type
                     })
                 elif step_type == "memory_lookup":
                     messages.append({
                         "role": "tool",
-                        "content": json.dumps(s.get("output", {}))
+                        "content": json.dumps(s.get("output", {})),
+                        "duration_ms": duration_ms,
+                        "step_type": step_type
                     })
+
             final = parsed.get("final_output", {})
             if final:
                 messages.append({
                     "role": "assistant",
-                    "content": final.get("response_summary", str(final))
+                    "content": final.get("response_summary", str(final)),
+                    "duration_ms": None,
+                    "step_type": "final"
                 })
         else:
             messages = [parsed]
@@ -112,7 +126,13 @@ def parse_raw_json_trace(raw_input):
         else:
             content = str(content_raw)
 
-        steps.append({"step": i + 1, "actor": actor, "content": content.strip()})
+        steps.append({
+            "step": i + 1,
+            "actor": actor,
+            "content": content.strip(),
+            "duration_ms": msg.get("duration_ms", None),
+            "step_type": msg.get("step_type", None)
+        })
 
     return steps
 
@@ -137,12 +157,116 @@ def parse_trace(trace_input):
         content = content.strip()
         if actor not in ["user", "agent", "tool"]:
             continue
-        steps.append({"step": i + 1, "actor": actor, "content": content})
+        steps.append({
+            "step": i + 1,
+            "actor": actor,
+            "content": content,
+            "duration_ms": None,
+            "step_type": None
+        })
     return steps
 
 
 # ─────────────────────────────────────────
-# LAYER 1 — DETERMINISTIC FAILURE DETECTION
+# SEMANTIC CHECKER — only fires when
+# keyword matching is uncertain
+# ─────────────────────────────────────────
+def semantic_check_tool_failure(content):
+    """
+    Called only when keyword matching is uncertain.
+    Asks GPT-4o-mini a simple yes/no: did this tool call fail?
+    Returns True if failed, False if success, None if can't determine.
+    """
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{
+                "role": "user",
+                "content": f"""Analyze this tool output and answer with ONLY 'FAILED' or 'SUCCESS'.
+A tool has FAILED if: it returned an error, exception, empty result when data was expected,
+wrong status, or any indication the operation did not complete correctly.
+A tool has SUCCEEDED if: it returned valid data, a success status, or completed the operation.
+
+Tool output: {content[:500]}
+
+Answer (FAILED or SUCCESS only):"""
+            }],
+            max_tokens=10,
+            temperature=0
+        )
+        answer = response.choices[0].message.content.strip().upper()
+        if "FAILED" in answer:
+            return True
+        elif "SUCCESS" in answer:
+            return False
+        return None
+    except Exception:
+        return None
+
+
+# ─────────────────────────────────────────
+# LATENCY DETECTION
+# ─────────────────────────────────────────
+def detect_latency_issues(steps):
+    """
+    Detects steps with abnormally high duration compared to
+    the average for that step type. Flags bottlenecks.
+    """
+    latency_failures = []
+
+    # Expected max durations by step type in ms
+    EXPECTED_MAX_MS = {
+        "tool_call": 3000,
+        "reasoning": 2000,
+        "memory_lookup": 1000,
+        "final": 5000
+    }
+
+    # Collect durations per step type
+    durations_by_type = {}
+    for step in steps:
+        duration = step.get("duration_ms")
+        step_type = step.get("step_type")
+        if duration and step_type:
+            if step_type not in durations_by_type:
+                durations_by_type[step_type] = []
+            durations_by_type[step_type].append((step["step"], duration))
+
+    # Flag steps that exceed 2x the average for their type
+    # OR exceed the absolute expected max
+    for step_type, entries in durations_by_type.items():
+        if not entries:
+            continue
+
+        durations = [d for _, d in entries]
+        avg_duration = sum(durations) / len(durations)
+        expected_max = EXPECTED_MAX_MS.get(step_type, 3000)
+
+        for step_num, duration in entries:
+            is_outlier = len(durations) > 1 and duration > avg_duration * 2
+            exceeds_expected = duration > expected_max
+
+            if is_outlier or exceeds_expected:
+                step_content = next(
+                    (s["content"] for s in steps if s["step"] == step_num), ""
+                )
+                latency_failures.append({
+                    "root_cause": "latency_bottleneck",
+                    "failure_type": "performance_degradation",
+                    "step": step_num,
+                    "severity": "high" if duration > expected_max * 2 else "medium",
+                    "description": f"Step took {duration}ms — significantly above expected {expected_max}ms for {step_type}",
+                    "evidence": step_content[:200],
+                    "duration_ms": duration,
+                    "avg_duration_ms": round(avg_duration),
+                    "expected_max_ms": expected_max
+                })
+
+    return latency_failures
+
+
+# ─────────────────────────────────────────
+# LAYER 1 — DETERMINISTIC + SEMANTIC
 # ─────────────────────────────────────────
 def detect_failures(steps):
     failures = []
@@ -151,7 +275,8 @@ def detect_failures(steps):
     last_scheduled_date = None
     last_scheduled_step = None
 
-    TOOL_ERROR_WORDS = [
+    # Clear error/success signals — high confidence, no LLM needed
+    CLEAR_ERROR_WORDS = [
         "error", "failed", "invalid", "not found", "missing",
         "unavailable", "could not", "cannot", "unable",
         "no flight selected", "no event details", "no valid",
@@ -160,6 +285,14 @@ def detect_failures(steps):
         "cancelled", "canceled", "rejected", "denied", "expired",
         "returned", "refunded", "closed", "terminated", "suspended"
     ]
+
+    # Ambiguous signals — uncertain, trigger semantic check
+    AMBIGUOUS_SIGNALS = [
+        "null", "none", "0", "empty", "[]", "{}", "n/a",
+        "no results", "not available", "not set", "undefined",
+        "false", "status: 0", "count: 0", "results_count\": 0"
+    ]
+
     SUCCESS_CLAIMS = [
         "successfully", "confirmed", "completed", "done",
         "booked", "processed", "sent", "added",
@@ -185,8 +318,12 @@ def detect_failures(steps):
         content_lower = content.lower()
 
         if actor == "tool":
-            is_tool_error = any(word in content_lower for word in TOOL_ERROR_WORDS)
-            if is_tool_error:
+            # Check for clear error signals first
+            is_clear_error = any(word in content_lower for word in CLEAR_ERROR_WORDS)
+            is_ambiguous = any(signal in content_lower for signal in AMBIGUOUS_SIGNALS)
+
+            if is_clear_error:
+                # High confidence — no LLM needed
                 last_tool_error = step
                 if any(word in content_lower for word in PERMISSION_WORDS):
                     failures.append({
@@ -197,9 +334,17 @@ def detect_failures(steps):
                         "description": "Tool returned a permission or authorization failure",
                         "evidence": content
                     })
+            elif is_ambiguous:
+                # Low confidence — ask LLM to verify
+                semantic_result = semantic_check_tool_failure(content)
+                if semantic_result is True:
+                    last_tool_error = step
+                else:
+                    last_tool_error = None
             else:
                 last_tool_error = None
 
+            # Date detection
             date_match = re.search(r'scheduled_for[^0-9]*(\d{4}-\d{2}-\d{2})', content)
             if date_match:
                 last_scheduled_date = date_match.group(1)
@@ -208,6 +353,7 @@ def detect_failures(steps):
         elif actor == "agent":
             claims_success = any(word in content_lower for word in SUCCESS_CLAIMS)
 
+            # Contradiction: success after tool error
             if last_tool_error and claims_success:
                 failures.append({
                     "root_cause": "contradiction",
@@ -228,6 +374,7 @@ def detect_failures(steps):
                     "contradicted_by": last_tool_error["content"]
                 })
 
+            # Missing tool call
             if any(word in content_lower for word in BOOKING_CLAIMS):
                 booking_tool_found = any(
                     s["actor"] == "tool" and s["step"] < step["step"]
@@ -244,6 +391,7 @@ def detect_failures(steps):
                         "evidence": content
                     })
 
+            # Date mismatch
             if last_scheduled_date:
                 mentioned_dates = re.findall(r'\b(\w+\s+\d{1,2}(?:st|nd|rd|th)?)\b', content)
                 if mentioned_dates:
@@ -258,6 +406,7 @@ def detect_failures(steps):
                     })
                     last_scheduled_date = None
 
+            # Retry loop
             is_retry = any(word in content_lower for word in RETRY_WORDS)
             if is_retry:
                 retry_count += 1
@@ -287,6 +436,7 @@ def detect_pattern(failures):
     retry_count = failure_types.count("retry_loop")
     action_skipped_count = failure_types.count("action_skipped")
     date_misinterp_count = failure_types.count("date_misinterpretation")
+    latency_count = failure_types.count("performance_degradation")
 
     if hallucination_count >= 3 and tool_misuse_count >= 3:
         return {
@@ -336,7 +486,17 @@ def detect_pattern(failures):
             "affected_steps": steps_affected,
             "unique_failure_points": len(steps_affected),
             "total_instances": len(failures),
-            "root_fix": "Agent must verify tool's scheduled_for date matches requested date before confirming to user."
+            "root_fix": "Agent must verify tool scheduled_for date matches requested date before confirming to user."
+        }
+    if latency_count >= 1:
+        return {
+            "pattern": "latency_bottleneck",
+            "label": "LATENCY BOTTLENECK PATTERN",
+            "description": "One or more steps are taking significantly longer than expected, causing performance degradation.",
+            "affected_steps": steps_affected,
+            "unique_failure_points": len(steps_affected),
+            "total_instances": len(failures),
+            "root_fix": "Profile the slow step, check for API timeouts, oversized payloads, or missing caching. Add timeout limits and fallback logic."
         }
     return None
 
@@ -375,14 +535,12 @@ def compute_score(failures, pattern):
 
 
 # ─────────────────────────────────────────
-# PROMPT BUILDER — sends only anomalies to LLM
-# not the full trace, cuts cost and latency
+# PROMPT BUILDER
 # ─────────────────────────────────────────
 def build_prompt(steps, failures, score, breakdown):
-    # Only send failed steps to LLM, not entire trace
     MAX_CHARS = 12000
     failed_step_numbers = set(f["step"] for f in failures)
-    
+
     if failed_step_numbers:
         relevant_steps = [s for s in steps if s["step"] in failed_step_numbers
                          or s["step"] in {n-1 for n in failed_step_numbers}
@@ -397,7 +555,7 @@ def build_prompt(steps, failures, score, breakdown):
 You are an AI agent debugging engine.
 Return valid JSON only. No markdown. No commentary.
 
-Relevant Steps (around failure points only): {steps_str}
+Relevant Steps: {steps_str}
 Detected Failures: {failures_str}
 
 CRITICAL RULES:
@@ -413,24 +571,18 @@ CRITICAL RULES:
 
 FAILURE DETECTION GUIDANCE:
 
-1. MISSING TOOL CALL (action_skipped):
-   Agent says booking complete but no booking tool was called.
-   Diagnosis: root_cause=missing_tool_call, failure_type=action_skipped, severity=critical
-
-2. CALCULATION ERROR:
-   Tool returns price=150, tax=0.1. Agent says total is $155 (correct is $165).
-   Diagnosis: root_cause=logic_failure, failure_type=calculation_error, severity=high
-
-3. DATE MISINTERPRETATION:
-   Tool returns scheduled_for=2024-12-05 but agent confirms May 12th to user.
-   Diagnosis: root_cause=logic_failure, failure_type=date_misinterpretation, severity=high
+1. MISSING TOOL CALL: Agent claims completion without calling required tool. severity=critical
+2. CALCULATION ERROR: Agent math doesn't match tool output. severity=high
+3. DATE MISINTERPRETATION: Tool scheduled different date than agent confirmed. severity=high
+4. LATENCY BOTTLENECK: Step duration significantly exceeds expected. severity=high/medium
+5. SEMANTIC TOOL FAILURE: Tool returned ambiguous output that indicates failure. severity=high
 
 Schema:
 {{
   "timeline": [{{"step": 1, "actor": "User | Agent | Tool", "event": "string", "evidence": "exact quote"}}],
   "failures": [{{
-    "root_cause": "contradiction | permission_failure | logic_failure | missing_tool_call | missing_context | unknown",
-    "failure_type": "hallucination | tool_misuse | retry_loop | action_skipped | calculation_error | date_misinterpretation | tool_schema_error | context_drop | unknown",
+    "root_cause": "contradiction | permission_failure | logic_failure | missing_tool_call | latency_bottleneck | missing_context | unknown",
+    "failure_type": "hallucination | tool_misuse | retry_loop | action_skipped | calculation_error | date_misinterpretation | performance_degradation | tool_schema_error | context_drop | unknown",
     "failure_point": {{"step": "number", "description": "string", "evidence": "exact quote"}},
     "impact": "string",
     "likely_cause": {{"confirmed": "string", "hypothesis": "string or unknown"}},
@@ -458,12 +610,17 @@ if st.button("Analyze Trace", type="primary"):
             if not steps:
                 st.error("Could not parse trace. Make sure it is valid JSON or line format (actor: content).")
             else:
+                # Layer 1 — deterministic + semantic
                 failures = detect_failures(steps)
-                pattern = detect_pattern(failures)
-                score, breakdown = compute_score(failures, pattern)
-                prompt = build_prompt(steps, failures, score, breakdown)
 
-                client = OpenAI(api_key=api_key)
+                # Latency detection — pure Python, no LLM
+                latency_failures = detect_latency_issues(steps)
+                all_failures = failures + latency_failures
+
+                pattern = detect_pattern(all_failures)
+                score, breakdown = compute_score(all_failures, pattern)
+                prompt = build_prompt(steps, all_failures, score, breakdown)
+
                 response = client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[{"role": "user", "content": prompt}]
@@ -479,9 +636,9 @@ if st.button("Analyze Trace", type="primary"):
                 try:
                     parsed = json.loads(raw)
 
-                    # Adjust score for failures GPT-4o-mini caught that Layer 1 missed
+                    # Adjust score for GPT-4o-mini findings Layer 1 missed
                     gpt_failures = parsed.get("failures", [])
-                    layer1_types = [f.get("failure_type") for f in failures]
+                    layer1_types = [f.get("failure_type") for f in all_failures]
                     gpt_only_failures = [f for f in gpt_failures if f.get("failure_type") not in layer1_types]
                     for gf in gpt_only_failures:
                         severity = gf.get("severity", "medium")
@@ -496,6 +653,15 @@ if st.button("Analyze Trace", type="primary"):
                         st.warning(f"Score: {score}/100 🟡 WARNING")
                     else:
                         st.success(f"Score: {score}/100 🟢 OK")
+
+                    # ── LATENCY SUMMARY ──
+                    if latency_failures:
+                        st.subheader("⚡ Latency Bottlenecks Detected")
+                        for lf in latency_failures:
+                            st.warning(
+                                f"Step {lf['step']} — {lf['duration_ms']}ms "
+                                f"(expected max {lf['expected_max_ms']}ms) — {lf['description']}"
+                            )
 
                     # ── PATTERN ──
                     if pattern:
