@@ -599,7 +599,7 @@ def detect_failures(steps):
                     "retry was successful", "attempt succeeded",
                     "succeeded after retry", "resolved after retry"
                 ]
-                if any(claim in content_lower for claim in RETRY_SUCCESS_CLAIMS):
+                if is_hallucinated_retry:
                     # Check if any tool call actually happened after the last error
                     last_error_step = last_tool_error["step"] if last_tool_error else 0
                     retry_tool_found = any(
