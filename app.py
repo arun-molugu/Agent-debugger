@@ -915,6 +915,11 @@ if st.button("Analyze Trace", type="primary"):
 
                     # Show Layer 1 failures first — deterministic and authoritative
                     shown_types = set()
+                    # If hallucinated_retry detected, suppress generic hallucination
+                    layer1_failure_types = [f.get("failure_type") for f in all_failures]
+                    if "hallucinated_retry" in layer1_failure_types:
+                        shown_types.add("hallucination")
+                        shown_types.add("tool_misuse")
                     for f in all_failures:
                         ftype = f.get("failure_type", "unknown").upper()
                         severity = f.get("severity", "").upper()
