@@ -73,7 +73,7 @@ def parse_raw_json_trace(raw_input):
                     messages.append({
                         "role": "tool",
                         "content": json.dumps(tool_output) if status == "success" else f"error: {json.dumps(tool_output)}",
-                        "duration_ms": none,
+                        "duration_ms": None,
                         "step_type": step_type
                     })
                 elif step_type == "memory_lookup":
@@ -412,13 +412,13 @@ def detect_failures(steps):
         "unavailable", "could not", "cannot", "unable",
         "no flight selected", "no event details", "no valid",
         "no previous", "no document", "no session", "no scheduled",
-        "dropped", "none found", "exceeded",
+        "dropped", "None found", "exceeded",
         "cancelled", "canceled", "rejected", "denied", "expired",
         "returned", "refunded", "closed", "terminated", "suspended"
     ]
 
     AMBIGUOUS_SIGNALS = [
-        "null", "none", "0", "empty", "[]", "{}", "n/a",
+        "null", "None", "0", "empty", "[]", "{}", "n/a",
         "no results", "not available", "not set", "undefined",
         "false", "status: 0", "count: 0", "results_count\": 0"
     ]
