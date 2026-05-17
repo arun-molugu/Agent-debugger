@@ -571,7 +571,7 @@ def detect_failures(steps):
 
 
             # Numerical mismatch — always critical
-            if last_tool_content:
+            if last_tool_content and step.get("step_type") not in ["system_error", "final":
                 num_mismatch = detect_numerical_mismatch(
                     last_tool_content, content, step["step"]
                 )
