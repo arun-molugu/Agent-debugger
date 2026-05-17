@@ -38,13 +38,17 @@ def parse_raw_json_trace(raw_input):
     else:
         parsed = raw_input
 
+    # Extract metrics if present at top level
+    metrics = None
+    if isinstance(parsed, dict):
+        metrics = parsed.get("metrics", None)
+
     if isinstance(parsed, dict):
         if "trace" in parsed:
             messages = parsed["trace"]
         elif "steps" in parsed:
             messages = []
-            raw_steps = parsed["steps"]
-            for s in raw_steps:
+            for s in parsed["steps"]:
                 step_type = s.get("type", "")
                 status = s.get("status", "")
                 duration_ms = s.get("duration_ms", None)
@@ -134,7 +138,7 @@ def parse_raw_json_trace(raw_input):
             "step_type": msg.get("step_type", None)
         })
 
-    return steps
+    return steps, metrics
 
 
 # ─────────────────────────────────────────
@@ -164,28 +168,22 @@ def parse_trace(trace_input):
             "duration_ms": None,
             "step_type": None
         })
-    return steps
+    return steps, None
 
 
 # ─────────────────────────────────────────
-# SEMANTIC CHECKER — only fires when
-# keyword matching is uncertain
+# SEMANTIC CHECKER
+# Only fires when keyword matching is uncertain
 # ─────────────────────────────────────────
 def semantic_check_tool_failure(content):
-    """
-    Called only when keyword matching is uncertain.
-    Asks GPT-4o-mini a simple yes/no: did this tool call fail?
-    Returns True if failed, False if success, None if can't determine.
-    """
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{
                 "role": "user",
                 "content": f"""Analyze this tool output and answer with ONLY 'FAILED' or 'SUCCESS'.
-A tool has FAILED if: it returned an error, exception, empty result when data was expected,
-wrong status, or any indication the operation did not complete correctly.
-A tool has SUCCEEDED if: it returned valid data, a success status, or completed the operation.
+FAILED: error, exception, empty result when data expected, wrong status, operation incomplete.
+SUCCESS: valid data returned, success status, operation completed correctly.
 
 Tool output: {content[:500]}
 
@@ -205,24 +203,126 @@ Answer (FAILED or SUCCESS only):"""
 
 
 # ─────────────────────────────────────────
-# LATENCY DETECTION
+# NUMERICAL MISMATCH DETECTION
+# Extracts all numbers from tool output and
+# checks if agent used different numbers
+# Always critical — even small differences matter at scale
+# ─────────────────────────────────────────
+def extract_numbers(text):
+    return re.findall(r'-?\d+\.?\d*', text)
+
+
+def detect_numerical_mismatch(tool_content, agent_content, step_num):
+    tool_numbers = extract_numbers(tool_content)
+    agent_numbers = extract_numbers(agent_content)
+
+    if not tool_numbers or not agent_numbers:
+        return None
+
+    # Check each number from tool output against agent output
+    for tool_num in tool_numbers:
+        tool_val = float(tool_num)
+        # Skip trivial numbers like 0, 1, step IDs
+        if abs(tool_val) < 2:
+            continue
+        # Check if this number appears correctly in agent output
+        found_match = any(
+            abs(float(agent_num) - tool_val) < 0.01
+            for agent_num in agent_numbers
+            if agent_num
+        )
+        if not found_match:
+            # Check if a different number appears that could be a distortion
+            close_mismatch = any(
+                abs(float(agent_num) - tool_val) > 0.01
+                and abs(float(agent_num)) > 2
+                for agent_num in agent_numbers
+                if agent_num
+            )
+            if close_mismatch:
+                return {
+                    "root_cause": "data_distortion",
+                    "failure_type": "numerical_mismatch",
+                    "step": step_num,
+                    "severity": "critical",
+                    "description": f"Agent reported a different number than tool returned. Tool had {tool_num} but agent used a different value.",
+                    "evidence": agent_content[:300],
+                    "contradicted_by": f"Tool returned: {tool_num}"
+                }
+    return None
+
+
+# ─────────────────────────────────────────
+# CONTEXT DROP DETECTION
+# Detects agent forgetting earlier context:
+# 1. Referring to something user never mentioned
+# 2. Contradicting something agent said earlier
+# ─────────────────────────────────────────
+def detect_context_drops(steps):
+    context_failures = []
+
+    # Collect what user actually mentioned
+    user_entities = set()
+    for step in steps:
+        if step["actor"] == "user":
+            words = re.findall(r'\b[A-Z][a-z]+\b|\b\d+\b', step["content"])
+            user_entities.update(words)
+
+    # Collect agent claims over time
+    agent_claims = []
+    for step in steps:
+        if step["actor"] == "agent":
+            # Check for contradiction with earlier agent claims
+            for prev_step, prev_claim in agent_claims:
+                # Extract numbers from both
+                prev_numbers = extract_numbers(prev_claim)
+                curr_numbers = extract_numbers(step["content"])
+
+                for pn in prev_numbers:
+                    pval = float(pn)
+                    if abs(pval) < 2:
+                        continue
+                    # If agent now claims a different number for same context
+                    for cn in curr_numbers:
+                        cval = float(cn)
+                        if abs(cval) > 2 and abs(cval - pval) > 0.01:
+                            # Check if they're talking about similar things
+                            prev_lower = prev_claim.lower()
+                            curr_lower = step["content"].lower()
+                            shared_words = set(prev_lower.split()) & set(curr_lower.split())
+                            # Filter out common words
+                            common_words = {"the", "a", "an", "is", "are", "was", "and", "or", "for", "to", "in", "of", "your", "i", "it"}
+                            meaningful_shared = shared_words - common_words
+                            if len(meaningful_shared) >= 2:
+                                context_failures.append({
+                                    "root_cause": "context_drop",
+                                    "failure_type": "self_contradiction",
+                                    "step": step["step"],
+                                    "severity": "critical",
+                                    "description": f"Agent contradicted its own earlier statement. Previously stated {pn}, now states {cn}.",
+                                    "evidence": step["content"][:300],
+                                    "contradicted_by": f"Step {prev_step}: {prev_claim[:200]}"
+                                })
+
+            agent_claims.append((step["step"], step["content"]))
+
+    return context_failures
+
+
+# ─────────────────────────────────────────
+# LATENCY DETECTION — tightened thresholds
 # ─────────────────────────────────────────
 def detect_latency_issues(steps):
-    """
-    Detects steps with abnormally high duration compared to
-    the average for that step type. Flags bottlenecks.
-    """
     latency_failures = []
 
-    # Expected max durations by step type in ms
+    # Tightened thresholds — realistic production expectations
     EXPECTED_MAX_MS = {
-        "tool_call": 3000,
-        "reasoning": 2000,
-        "memory_lookup": 1000,
-        "final": 5000
+        "tool_call": 2000,    # was 3000
+        "reasoning": 1500,    # was 2000
+        "memory_lookup": 500, # was 1000
+        "final": 3000         # was 5000
     }
 
-    # Collect durations per step type
     durations_by_type = {}
     for step in steps:
         duration = step.get("duration_ms")
@@ -232,18 +332,16 @@ def detect_latency_issues(steps):
                 durations_by_type[step_type] = []
             durations_by_type[step_type].append((step["step"], duration))
 
-    # Flag steps that exceed 2x the average for their type
-    # OR exceed the absolute expected max
     for step_type, entries in durations_by_type.items():
         if not entries:
             continue
 
         durations = [d for _, d in entries]
         avg_duration = sum(durations) / len(durations)
-        expected_max = EXPECTED_MAX_MS.get(step_type, 3000)
+        expected_max = EXPECTED_MAX_MS.get(step_type, 2000)
 
         for step_num, duration in entries:
-            is_outlier = len(durations) > 1 and duration > avg_duration * 2
+            is_outlier = len(durations) > 1 and duration > avg_duration * 1.5  # tightened from 2x
             exceeds_expected = duration > expected_max
 
             if is_outlier or exceeds_expected:
@@ -254,8 +352,8 @@ def detect_latency_issues(steps):
                     "root_cause": "latency_bottleneck",
                     "failure_type": "performance_degradation",
                     "step": step_num,
-                    "severity": "high" if duration > expected_max * 2 else "medium",
-                    "description": f"Step took {duration}ms — significantly above expected {expected_max}ms for {step_type}",
+                    "severity": "high" if duration > expected_max * 1.5 else "medium",
+                    "description": f"Step took {duration}ms — above expected {expected_max}ms for {step_type}",
                     "evidence": step_content[:200],
                     "duration_ms": duration,
                     "avg_duration_ms": round(avg_duration),
@@ -266,16 +364,48 @@ def detect_latency_issues(steps):
 
 
 # ─────────────────────────────────────────
+# METRICS EXTRACTION
+# Surfaces cost, token, and efficiency data
+# ─────────────────────────────────────────
+def extract_metrics_insights(metrics):
+    if not metrics:
+        return None
+
+    insights = []
+    cost = metrics.get("estimated_cost_usd", None)
+    tokens_in = metrics.get("total_tokens_input", None)
+    tokens_out = metrics.get("total_tokens_output", None)
+    tool_calls = metrics.get("tool_calls", None)
+
+    if cost:
+        cost_1k = round(cost * 1000, 2)
+        cost_10k = round(cost * 10000, 2)
+        insights.append(f"💰 Cost per query: ${cost:.4f} → ${cost_1k} per 1K queries → ${cost_10k} per 10K queries")
+        if cost > 0.05:
+            insights.append(f"⚠️ High cost per query — consider prompt compression or caching repeated tool calls")
+
+    if tokens_in and tokens_out:
+        ratio = round(tokens_in / tokens_out, 1) if tokens_out > 0 else 0
+        insights.append(f"📊 Token usage: {tokens_in} input / {tokens_out} output (ratio {ratio}:1)")
+        if tokens_in > 2000:
+            insights.append(f"⚠️ Large input context ({tokens_in} tokens) — consider summarizing earlier steps to reduce cost")
+
+    if tool_calls is not None:
+        insights.append(f"🔧 Tool calls made: {tool_calls}")
+
+    return insights
+
+
+# ─────────────────────────────────────────
 # LAYER 1 — DETERMINISTIC + SEMANTIC
 # ─────────────────────────────────────────
 def detect_failures(steps):
     failures = []
     last_tool_error = None
+    last_tool_content = None
     retry_count = 0
     last_scheduled_date = None
-    last_scheduled_step = None
 
-    # Clear error/success signals — high confidence, no LLM needed
     CLEAR_ERROR_WORDS = [
         "error", "failed", "invalid", "not found", "missing",
         "unavailable", "could not", "cannot", "unable",
@@ -286,7 +416,6 @@ def detect_failures(steps):
         "returned", "refunded", "closed", "terminated", "suspended"
     ]
 
-    # Ambiguous signals — uncertain, trigger semantic check
     AMBIGUOUS_SIGNALS = [
         "null", "none", "0", "empty", "[]", "{}", "n/a",
         "no results", "not available", "not set", "undefined",
@@ -318,13 +447,12 @@ def detect_failures(steps):
         content_lower = content.lower()
 
         if actor == "tool":
-            # Check for clear error signals first
             is_clear_error = any(word in content_lower for word in CLEAR_ERROR_WORDS)
             is_ambiguous = any(signal in content_lower for signal in AMBIGUOUS_SIGNALS)
 
             if is_clear_error:
-                # High confidence — no LLM needed
                 last_tool_error = step
+                last_tool_content = content
                 if any(word in content_lower for word in PERMISSION_WORDS):
                     failures.append({
                         "root_cause": "permission_failure",
@@ -335,20 +463,20 @@ def detect_failures(steps):
                         "evidence": content
                     })
             elif is_ambiguous:
-                # Low confidence — ask LLM to verify
                 semantic_result = semantic_check_tool_failure(content)
                 if semantic_result is True:
                     last_tool_error = step
+                    last_tool_content = content
                 else:
                     last_tool_error = None
+                    last_tool_content = content
             else:
                 last_tool_error = None
+                last_tool_content = content
 
-            # Date detection
             date_match = re.search(r'scheduled_for[^0-9]*(\d{4}-\d{2}-\d{2})', content)
             if date_match:
                 last_scheduled_date = date_match.group(1)
-                last_scheduled_step = step
 
         elif actor == "agent":
             claims_success = any(word in content_lower for word in SUCCESS_CLAIMS)
@@ -373,6 +501,14 @@ def detect_failures(steps):
                     "evidence": content,
                     "contradicted_by": last_tool_error["content"]
                 })
+
+            # Numerical mismatch — always critical
+            if last_tool_content:
+                num_mismatch = detect_numerical_mismatch(
+                    last_tool_content, content, step["step"]
+                )
+                if num_mismatch:
+                    failures.append(num_mismatch)
 
             # Missing tool call
             if any(word in content_lower for word in BOOKING_CLAIMS):
@@ -426,7 +562,7 @@ def detect_failures(steps):
 
 
 # ─────────────────────────────────────────
-# PATTERN DETECTION
+# PATTERN DETECTION — lowered thresholds
 # ─────────────────────────────────────────
 def detect_pattern(failures):
     failure_types = [f["failure_type"] for f in failures]
@@ -437,12 +573,15 @@ def detect_pattern(failures):
     action_skipped_count = failure_types.count("action_skipped")
     date_misinterp_count = failure_types.count("date_misinterpretation")
     latency_count = failure_types.count("performance_degradation")
+    numerical_count = failure_types.count("numerical_mismatch")
+    context_drop_count = failure_types.count("self_contradiction")
 
-    if hallucination_count >= 3 and tool_misuse_count >= 3:
+    # Lowered from 3 to 2 — catches smaller cascades
+    if hallucination_count >= 2 and tool_misuse_count >= 2:
         return {
             "pattern": "cascading_failure",
             "label": "CASCADING FAILURE PATTERN",
-            "description": "Agent has no error checking after tool calls. Same failure repeating across multiple steps.",
+            "description": "Agent has no error checking after tool calls. Failure repeating across multiple steps.",
             "affected_steps": steps_affected,
             "unique_failure_points": len(steps_affected),
             "total_instances": len(failures),
@@ -458,11 +597,31 @@ def detect_pattern(failures):
             "total_instances": len(failures),
             "root_fix": "Implement a maximum retry limit with exponential backoff. After N retries, agent must stop and inform the user."
         }
-    if hallucination_count >= 2:
+    if hallucination_count >= 1 and numerical_count >= 1:
         return {
-            "pattern": "repeated_hallucination",
-            "label": "REPEATED HALLUCINATION PATTERN",
-            "description": "Agent is repeatedly fabricating successful outcomes without tool verification.",
+            "pattern": "data_distortion",
+            "label": "DATA DISTORTION PATTERN",
+            "description": "Agent is misreporting tool data to the user — wrong numbers, flipped values, or fabricated figures.",
+            "affected_steps": steps_affected,
+            "unique_failure_points": len(steps_affected),
+            "total_instances": len(failures),
+            "root_fix": "Enforce strict output binding — agent must pass tool values directly to user without transformation unless explicitly computing a derived value."
+        }
+    if context_drop_count >= 1:
+        return {
+            "pattern": "context_drop",
+            "label": "CONTEXT DROP PATTERN",
+            "description": "Agent contradicted its own earlier statement or referred to information not present in the conversation.",
+            "affected_steps": steps_affected,
+            "unique_failure_points": len(steps_affected),
+            "total_instances": len(failures),
+            "root_fix": "Implement conversation state tracking. Agent must verify claims against earlier steps before responding."
+        }
+    if hallucination_count >= 1:
+        return {
+            "pattern": "hallucination",
+            "label": "HALLUCINATION PATTERN",
+            "description": "Agent fabricated a successful outcome without tool verification.",
             "affected_steps": steps_affected,
             "unique_failure_points": len(steps_affected),
             "total_instances": len(failures),
@@ -476,7 +635,7 @@ def detect_pattern(failures):
             "affected_steps": steps_affected,
             "unique_failure_points": len(steps_affected),
             "total_instances": len(failures),
-            "root_fix": "Enforce a tool-call gate: agent must receive explicit tool confirmation before reporting any action as complete to the user."
+            "root_fix": "Enforce a tool-call gate: agent must receive explicit tool confirmation before reporting any action as complete."
         }
     if date_misinterp_count >= 1:
         return {
@@ -492,7 +651,7 @@ def detect_pattern(failures):
         return {
             "pattern": "latency_bottleneck",
             "label": "LATENCY BOTTLENECK PATTERN",
-            "description": "One or more steps are taking significantly longer than expected, causing performance degradation.",
+            "description": "One or more steps are taking significantly longer than expected.",
             "affected_steps": steps_affected,
             "unique_failure_points": len(steps_affected),
             "total_instances": len(failures),
@@ -562,27 +721,28 @@ CRITICAL RULES:
 - reliability_score is FIXED at {score}. Do not change it.
 - score_breakdown is FIXED at {breakdown}. Do not change it.
 - If tool output directly contradicts agent response, confirmed cause must state the contradiction explicitly.
-- Hallucination severity is always critical when agent produces false user-facing output.
+- Hallucination severity is always critical.
+- Numerical mismatch severity is always critical — even small differences matter at scale.
 - Use exact quotes from steps as evidence.
 - overall_confidence above 0.8 if contradiction is obvious.
-- Quick fix must be implementable in under 1 hour.
-- Robust fix must be a systemic architectural solution.
+- Quick fix implementable in under 1 hour.
+- Robust fix is a systemic architectural solution.
 - Response must be valid JSON.
 
 FAILURE DETECTION GUIDANCE:
-
 1. MISSING TOOL CALL: Agent claims completion without calling required tool. severity=critical
-2. CALCULATION ERROR: Agent math doesn't match tool output. severity=high
+2. CALCULATION/NUMERICAL ERROR: Any number agent states differs from tool output. severity=critical
 3. DATE MISINTERPRETATION: Tool scheduled different date than agent confirmed. severity=high
 4. LATENCY BOTTLENECK: Step duration significantly exceeds expected. severity=high/medium
-5. SEMANTIC TOOL FAILURE: Tool returned ambiguous output that indicates failure. severity=high
+5. CONTEXT DROP: Agent contradicts itself or references information not in conversation. severity=critical
+6. DATA DISTORTION: Agent reports wrong values from tool output. severity=critical
 
 Schema:
 {{
   "timeline": [{{"step": 1, "actor": "User | Agent | Tool", "event": "string", "evidence": "exact quote"}}],
   "failures": [{{
-    "root_cause": "contradiction | permission_failure | logic_failure | missing_tool_call | latency_bottleneck | missing_context | unknown",
-    "failure_type": "hallucination | tool_misuse | retry_loop | action_skipped | calculation_error | date_misinterpretation | performance_degradation | tool_schema_error | context_drop | unknown",
+    "root_cause": "contradiction | permission_failure | logic_failure | missing_tool_call | latency_bottleneck | context_drop | data_distortion | missing_context | unknown",
+    "failure_type": "hallucination | tool_misuse | retry_loop | action_skipped | calculation_error | numerical_mismatch | date_misinterpretation | performance_degradation | self_contradiction | context_drop | tool_schema_error | unknown",
     "failure_point": {{"step": "number", "description": "string", "evidence": "exact quote"}},
     "impact": "string",
     "likely_cause": {{"confirmed": "string", "hypothesis": "string or unknown"}},
@@ -605,7 +765,7 @@ if st.button("Analyze Trace", type="primary"):
         st.error("Please paste a trace.")
     else:
         with st.spinner("Analyzing trace..."):
-            steps = parse_trace(trace_input)
+            steps, metrics = parse_trace(trace_input)
 
             if not steps:
                 st.error("Could not parse trace. Make sure it is valid JSON or line format (actor: content).")
@@ -613,9 +773,14 @@ if st.button("Analyze Trace", type="primary"):
                 # Layer 1 — deterministic + semantic
                 failures = detect_failures(steps)
 
-                # Latency detection — pure Python, no LLM
+                # Context drop detection
+                context_failures = detect_context_drops(steps)
+
+                # Latency detection
                 latency_failures = detect_latency_issues(steps)
-                all_failures = failures + latency_failures
+
+                # Merge all failures
+                all_failures = failures + context_failures + latency_failures
 
                 pattern = detect_pattern(all_failures)
                 score, breakdown = compute_score(all_failures, pattern)
@@ -654,9 +819,16 @@ if st.button("Analyze Trace", type="primary"):
                     else:
                         st.success(f"Score: {score}/100 🟢 OK")
 
-                    # ── LATENCY SUMMARY ──
+                    # ── METRICS ──
+                    metrics_insights = extract_metrics_insights(metrics)
+                    if metrics_insights:
+                        st.subheader("💡 Cost & Efficiency Insights")
+                        for insight in metrics_insights:
+                            st.markdown(insight)
+
+                    # ── LATENCY ──
                     if latency_failures:
-                        st.subheader("⚡ Latency Bottlenecks Detected")
+                        st.subheader("⚡ Latency Bottlenecks")
                         for lf in latency_failures:
                             st.warning(
                                 f"Step {lf['step']} — {lf['duration_ms']}ms "
