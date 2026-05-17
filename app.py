@@ -880,9 +880,9 @@ if st.button("Analyze Trace", type="primary"):
                     
                     
 
-             except json.JSONDecodeError:
-                    st.error("Failed to parse response. Raw output:")
-                    st.markdown(raw)
+                except json.JSONDecodeError:
+                       st.error("Failed to parse response. Raw output:")
+                       st.markdown(raw)
 
 st.divider()
 st.caption("Agent Debugger | AI Agent Observability")
