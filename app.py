@@ -425,6 +425,7 @@ def detect_failures(steps):
     failures = []
     last_tool_error = None
     last_tool_content = None
+    last_tool_error_step = 0
     retry_count = 0
     last_scheduled_date = None
 
@@ -475,6 +476,7 @@ def detect_failures(steps):
             if is_clear_error:
                 last_tool_error = step
                 last_tool_content = content
+                last_tool_error_step = step["step"]
                 if any(word in content_lower for word in PERMISSION_WORDS):
                     failures.append({
                         "root_cause": "permission_failure",
@@ -600,11 +602,11 @@ def detect_failures(steps):
                 ]
                 if is_hallucinated_retry:
                     # Check if any tool call actually happened after the last error
-                    last_error_step = last_tool_error["step"] if last_tool_error else 0
                     retry_tool_found = any(
-                        s["actor"] == "tool" and s["step"] > last_error_step
+                        s["actor"] == "tool" 
+                        and s["step"] > last_tool_error_step
+                        and s["step"] < step["step"]
                         for s in steps
-                        if s["step"] < step["step"]
                     )
                     if not retry_tool_found:
                         failures.append({
