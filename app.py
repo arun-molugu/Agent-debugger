@@ -148,8 +148,7 @@ def parse_trace(trace_input):
     trace_input = trace_input.strip()
     try:
         return parse_raw_json_trace(trace_input)
-    except Exception as e:
-        st.warning(f"JSON parse error: {e}")
+    except Exception:
         pass
 
     steps = []
