@@ -263,6 +263,10 @@ def extract_numbers(text):
 
 
 def detect_numerical_mismatch(tool_content, agent_content, step_num):
+    # Skip if tool content is an error message
+    if tool_content.strip().startswith("error:"):
+        return None
+    
     tool_numbers = extract_numbers(tool_content)
     agent_numbers = extract_numbers(agent_content)
 
