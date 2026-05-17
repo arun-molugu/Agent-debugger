@@ -965,6 +965,11 @@ if st.button("Analyze Trace", type="primary"):
                     if "hallucinated_retry" in layer1_failure_types:
                         shown_types.add("hallucination")
                         shown_types.add("tool_misuse")
+                    # If critical system failure detected, suppress GPT numerical mismatch
+                    if "critical_system_failure" in layer1_failure_types:
+                        shown_types.add("numerical_mismatch")
+                        shown_types.add("hallucination")
+                        
                     for f in all_failures:
                         ftype = f.get("failure_type", "unknown").upper()
                         severity = f.get("severity", "").upper()
