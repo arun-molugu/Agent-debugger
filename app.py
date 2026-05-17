@@ -96,6 +96,14 @@ def parse_raw_json_trace(raw_input):
                             "duration_ms": duration_ms,
                             "step_type": step_type
                         })
+                    elif status == "warning":
+                        messages.append({
+                            "role": "tool",
+                            "content": f"warning: {json.dumps(output)}",
+                            "duration_ms": duration_ms,
+                            "step_type": step_type
+                        })
+                    
                     else:
                         messages.append({
                             "role": "tool",
