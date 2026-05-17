@@ -601,6 +601,7 @@ def detect_failures(steps):
                     "succeeded after retry", "resolved after retry"
                 ]
                 if is_hallucinated_retry:
+                    st.write(f"DEBUG: last_tool_error_step={last_tool_error_step}, current_step={step['step']}, is_hallucinated_retry={is_hallucinated_retry}")
                     # Check if any tool call actually happened after the last error
                     retry_tool_found = any(
                         s["actor"] == "tool" 
