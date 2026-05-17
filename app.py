@@ -673,7 +673,18 @@ def detect_failures(steps):
                 "description": "System reported a critical error in the errors block",
                 "evidence": step["content"]
             })
-
+    # Surface warning status steps as medium severity risk flags
+    for step in steps:
+        content = step.get("content", "")
+        if content.lower().startswith("warning:"):
+            failures.append({
+                "root_cause": "agent_warning",
+                "failure_type": "risk_flag",
+                "step": step["step"],
+                "severity": "medium",
+                "description": "Step reported warning status with risk flags",
+                "evidence": content[:300]
+            })
     return failures
 
 
