@@ -282,9 +282,11 @@ def parse_trace(trace_input):
 
     # 1. Try nano-vm parser first
     try:
-        if '"trace_id"' in trace_input and '"steps"' in trace_input:
-            steps, metrics = parse_nano_vm_trace(trace_input)
-            return steps, metrics
+        if '"trace_id"' in trace_input and '"steps"' in trace_input and '"vm_version"' not in trace_input:
+            # Additional check: nano-vm traces have simple step types (llm, tool, condition, parallel)
+            if any(t in trace_input for t in ['"type": "llm"', '"type": "tool"', '"type": "condition"', '"type": "parallel"']):
+                steps, metrics = parse_nano_vm_trace(trace_input)
+                return steps, metrics
     except Exception:
         pass
 
