@@ -617,7 +617,7 @@ def detect_unverifiable_assertions(steps):
     }
 
     OBSERVABLE_INDICATORS = {
-        "retry_logic": ["retry", "attempt", "retrying", "backoff"],
+        "retry_logic": ["retrying", "retry attempt", "backoff", "attempt complete"],
         "loop_prevention": ["loop", "cycle", "guard", "condition", "break"],
         "safeguard": ["safeguard", "guard", "safety", "protection", "check"],
         "error_handling": ["error", "exception", "catch", "recover", "fallback"],
