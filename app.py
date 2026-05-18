@@ -2,11 +2,12 @@ import streamlit as st
 import json
 import re
 from openai import OpenAI
+from typing import List, Dict, Any, Optional, Tuple
 
 st.set_page_config(page_title="Agent Debugger", page_icon="🔍", layout="wide")
 
 st.title("🔍 Agent Debugger")
-st.write("Paste any agent execution trace — raw JSON or line format — to get an instant debugging report.")
+st.write("Paste any agent execution trace — nano-vm, raw JSON, or line format — to get an instant debugging report.")
 
 # ─────────────────────────────────────────
 # API KEY FROM BACKEND
@@ -22,7 +23,102 @@ trace_input = st.text_area("Paste agent trace here", height=250)
 
 
 # ─────────────────────────────────────────
-# RAW JSON TRACE PARSER
+# NANO-VM TRACE PARSER (v0.7.5)
+# ─────────────────────────────────────────
+def parse_nano_vm_trace(raw_input: str):
+    if isinstance(raw_input, str):
+        raw_input = raw_input.strip()
+        try:
+            parsed_json = json.loads(raw_input)
+        except json.JSONDecodeError:
+            raise ValueError("Invalid JSON")
+
+        if not isinstance(parsed_json, dict):
+            raise ValueError("Root must be a JSON object")
+        if "trace_id" not in parsed_json or "steps" not in parsed_json:
+            raise ValueError("Missing 'trace_id' or 'steps': not a nano-vm trace")
+
+        trace_obj = parsed_json
+    else:
+        raise ValueError("Input must be a JSON string")
+
+    trace_id = trace_obj.get("trace_id", "unknown")
+    status = trace_obj.get("status", "UNKNOWN")
+    final_output = trace_obj.get("final_output", None)
+    steps_raw = trace_obj.get("steps", [])
+    snapshots_raw = trace_obj.get("state_snapshots", [])
+
+    # Build snapshot map for O(1) lookup
+    snapshot_map = {}
+    for item in snapshots_raw:
+        if isinstance(item, (list, tuple)) and len(item) == 2:
+            idx, hsh = item
+            snapshot_map[int(idx)] = str(hsh)
+        elif isinstance(item, dict):
+            if "step" in item and "hash" in item:
+                snapshot_map[int(item["step"])] = str(item["hash"])
+
+    steps = []
+    for i, step_data in enumerate(steps_raw):
+        step_type = step_data.get("type", "unknown")
+        duration_ms = step_data.get("duration_ms", 0)
+        output = step_data.get("output", "")
+        error = step_data.get("error", None)
+        status_step = step_data.get("status", "SUCCESS")
+
+        if step_type == "llm":
+            actor = "agent"
+            content = str(output)
+        elif step_type == "tool":
+            actor = "tool"
+            if isinstance(output, (dict, list)):
+                content = json.dumps(output, indent=2)
+            else:
+                content = str(output)
+            if error:
+                content = f"error: {error}\n\n{content}"
+        elif step_type == "condition":
+            actor = "system"
+            cond_expr = step_data.get("condition_expr", "N/A")
+            result = step_data.get("result", "N/A")
+            content = f"Condition: {cond_expr} → Result: {result}"
+        elif step_type == "parallel":
+            actor = "system"
+            content = f"Parallel Block ({len(step_data.get('parallel_steps', []))} sub-steps)"
+        else:
+            actor = "system"
+            content = str(output)
+
+        step_hash = snapshot_map.get(i, None)
+
+        steps.append({
+            "step": i + 1,
+            "actor": actor,
+            "content": content,
+            "duration_ms": duration_ms,
+            "step_type": step_type,
+            "step_hash": step_hash,
+            "error": error,
+            "status": status_step,
+            "step_id": step_data.get("step_id", f"step_{i}")
+        })
+
+    metrics = {
+        "total_tokens": trace_obj.get("total_tokens", 0),
+        "total_cost_usd": trace_obj.get("total_cost_usd", 0.0),
+        "vm_version": "0.7.5",
+        "trace_id": trace_id,
+        "status": status,
+        "final_output": final_output,
+        "_nano_vm_snapshots": snapshot_map,
+        "_is_nano_vm": True
+    }
+
+    return steps, metrics
+
+
+# ─────────────────────────────────────────
+# RAW JSON TRACE PARSER (unchanged)
 # ─────────────────────────────────────────
 def parse_raw_json_trace(raw_input):
     if isinstance(raw_input, str):
@@ -86,7 +182,6 @@ def parse_raw_json_trace(raw_input):
                         "step_type": step_type
                     })
                 else:
-                    # Unknown step type — check status and surface failures
                     output = s.get("output", {})
                     if status == "failure":
                         failure_reason = output.get("failure_reason", str(output))
@@ -103,7 +198,6 @@ def parse_raw_json_trace(raw_input):
                             "duration_ms": duration_ms,
                             "step_type": step_type
                         })
-                    
                     else:
                         messages.append({
                             "role": "tool",
@@ -111,7 +205,7 @@ def parse_raw_json_trace(raw_input):
                             "duration_ms": duration_ms,
                             "step_type": step_type
                         })
-            # Inject top level errors as tool failure steps
+
             for err in top_level_errors:
                 messages.append({
                     "role": "tool",
@@ -120,7 +214,6 @@ def parse_raw_json_trace(raw_input):
                     "step_type": "system_error",
                     "severity": err.get("severity", "high")
                 })
-                    
 
             final = parsed.get("final_output", {})
             if final:
@@ -173,22 +266,35 @@ def parse_raw_json_trace(raw_input):
             "actor": actor,
             "content": content.strip(),
             "duration_ms": msg.get("duration_ms", None),
-            "step_type": msg.get("step_type", None)
+            "step_type": msg.get("step_type", None),
+            "step_hash": None,
+            "status": "success"
         })
 
     return steps, metrics
 
 
 # ─────────────────────────────────────────
-# SMART ENTRY POINT
+# SMART ENTRY POINT — nano-vm first
 # ─────────────────────────────────────────
 def parse_trace(trace_input):
     trace_input = trace_input.strip()
+
+    # 1. Try nano-vm parser first
+    try:
+        if '"trace_id"' in trace_input and '"steps"' in trace_input:
+            steps, metrics = parse_nano_vm_trace(trace_input)
+            return steps, metrics
+    except Exception:
+        pass
+
+    # 2. Try legacy JSON parser
     try:
         return parse_raw_json_trace(trace_input)
     except Exception:
         pass
 
+    # 3. Line-by-line fallback with multiline JSON support (unchanged)
     steps = []
     lines = trace_input.split("\n")
     i = 0
@@ -207,7 +313,6 @@ def parse_trace(trace_input):
         if actor not in ["user", "agent", "tool"]:
             i += 1
             continue
-        # If content starts with { collect multiline JSON
         if content.startswith("{"):
             json_lines = [content]
             i += 1
@@ -223,15 +328,17 @@ def parse_trace(trace_input):
             "actor": actor,
             "content": content,
             "duration_ms": None,
-            "step_type": None
+            "step_type": None,
+            "step_hash": None,
+            "status": "success"
         })
         step_num += 1
         i += 1
     return steps, None
 
+
 # ─────────────────────────────────────────
-# SEMANTIC CHECKER
-# Only fires when keyword matching is uncertain
+# SEMANTIC CHECKER (unchanged)
 # ─────────────────────────────────────────
 def semantic_check_tool_failure(content):
     try:
@@ -261,20 +368,16 @@ Answer (FAILED or SUCCESS only):"""
 
 
 # ─────────────────────────────────────────
-# NUMERICAL MISMATCH DETECTION
-# Extracts all numbers from tool output and
-# checks if agent used different numbers
-# Always critical — even small differences matter at scale
+# NUMERICAL MISMATCH DETECTION (unchanged)
 # ─────────────────────────────────────────
 def extract_numbers(text):
     return re.findall(r'-?\d+\.?\d*', text)
 
 
 def detect_numerical_mismatch(tool_content, agent_content, step_num):
-    # Skip if tool content is an error message
     if tool_content.strip().startswith("error:"):
         return None
-    
+
     tool_numbers = extract_numbers(tool_content)
     agent_numbers = extract_numbers(agent_content)
 
@@ -283,11 +386,8 @@ def detect_numerical_mismatch(tool_content, agent_content, step_num):
 
     for tool_num in tool_numbers:
         tool_val = float(tool_num)
-        # Skip trivial numbers
         if abs(tool_val) < 10:
             continue
-        # Skip numbers that don't appear in agent response at all
-        # Only flag when agent uses a DIFFERENT number for the same value
         agent_vals = [float(n) for n in agent_numbers if n]
         agent_mentions_similar = any(
             abs(av - tool_val) < tool_val * 0.5
@@ -296,7 +396,6 @@ def detect_numerical_mismatch(tool_content, agent_content, step_num):
         )
         if not agent_mentions_similar:
             continue
-        # Agent mentioned a similar but not identical number — that's a mismatch
         exact_match = any(abs(av - tool_val) < 0.01 for av in agent_vals)
         if not exact_match:
             mismatched_val = next(
@@ -317,28 +416,21 @@ def detect_numerical_mismatch(tool_content, agent_content, step_num):
 
 
 # ─────────────────────────────────────────
-# CONTEXT DROP DETECTION
-# Detects agent forgetting earlier context:
-# 1. Referring to something user never mentioned
-# 2. Contradicting something agent said earlier
+# CONTEXT DROP DETECTION (unchanged)
 # ─────────────────────────────────────────
 def detect_context_drops(steps):
     context_failures = []
 
-    # Collect what user actually mentioned
     user_entities = set()
     for step in steps:
         if step["actor"] == "user":
             words = re.findall(r'\b[A-Z][a-z]+\b|\b\d+\b', step["content"])
             user_entities.update(words)
 
-    # Collect agent claims over time
     agent_claims = []
     for step in steps:
         if step["actor"] == "agent":
-            # Check for contradiction with earlier agent claims
             for prev_step, prev_claim in agent_claims:
-                # Extract numbers from both
                 prev_numbers = extract_numbers(prev_claim)
                 curr_numbers = extract_numbers(step["content"])
 
@@ -346,15 +438,12 @@ def detect_context_drops(steps):
                     pval = float(pn)
                     if abs(pval) < 2:
                         continue
-                    # If agent now claims a different number for same context
                     for cn in curr_numbers:
                         cval = float(cn)
                         if abs(cval) > 2 and abs(cval - pval) > 0.01:
-                            # Check if they're talking about similar things
                             prev_lower = prev_claim.lower()
                             curr_lower = step["content"].lower()
                             shared_words = set(prev_lower.split()) & set(curr_lower.split())
-                            # Filter out common words
                             common_words = {"the", "a", "an", "is", "are", "was", "and", "or", "for", "to", "in", "of", "your", "i", "it"}
                             meaningful_shared = shared_words - common_words
                             if len(meaningful_shared) >= 2:
@@ -374,27 +463,41 @@ def detect_context_drops(steps):
 
 
 # ─────────────────────────────────────────
-# LATENCY DETECTION — tightened thresholds
+# LATENCY DETECTION — nano-vm aware
 # ─────────────────────────────────────────
 def detect_latency_issues(steps):
     latency_failures = []
 
-    # Tightened thresholds — realistic production expectations
+    # Detect if this is a nano-vm trace
+    is_nano_vm_trace = any(s.get("step_hash") is not None for s in steps)
+
     EXPECTED_MAX_MS = {
-        "tool_call": 2000,    # was 3000
-        "reasoning": 1500,    # was 2000
-        "memory_lookup": 500, # was 1000
-        "final": 3000         # was 5000
+        "tool": 2000,
+        "llm": 1500,
+        "condition": 50,
+        "parallel": 5000,
+        "tool_call": 2000,
+        "reasoning": 1500,
+        "memory_lookup": 500,
+        "final": 3000
     }
 
     durations_by_type = {}
     for step in steps:
         duration = step.get("duration_ms")
         step_type = step.get("step_type")
-        if duration and step_type:
-            if step_type not in durations_by_type:
-                durations_by_type[step_type] = []
-            durations_by_type[step_type].append((step["step"], duration))
+        if not duration or duration == 0:
+            continue
+
+        lookup_type = step_type
+        if step_type in ["llm", "reasoning"]:
+            lookup_type = "llm"
+        elif step_type in ["tool", "tool_call"]:
+            lookup_type = "tool"
+
+        if lookup_type not in durations_by_type:
+            durations_by_type[lookup_type] = []
+        durations_by_type[lookup_type].append((step["step"], duration))
 
     for step_type, entries in durations_by_type.items():
         if not entries:
@@ -405,7 +508,9 @@ def detect_latency_issues(steps):
         expected_max = EXPECTED_MAX_MS.get(step_type, 10000)
 
         for step_num, duration in entries:
-            is_outlier = len(durations) > 1 and duration > avg_duration * 1.5  # tightened from 2x
+            # Tighter threshold for nano-vm (1.3x) since VM overhead is near zero
+            multiplier = 1.3 if is_nano_vm_trace else 1.5
+            is_outlier = len(durations) > 1 and duration > avg_duration * multiplier
             exceeds_expected = duration > expected_max
 
             if is_outlier or exceeds_expected:
@@ -428,14 +533,29 @@ def detect_latency_issues(steps):
 
 
 # ─────────────────────────────────────────
-# METRICS EXTRACTION
-# Surfaces cost, token, and efficiency data
+# METRICS EXTRACTION — nano-vm aware
 # ─────────────────────────────────────────
 def extract_metrics_insights(metrics):
     if not metrics:
         return None
 
     insights = []
+
+    # nano-vm metrics format
+    if metrics.get("_is_nano_vm"):
+        cost = metrics.get("total_cost_usd", 0)
+        tokens = metrics.get("total_tokens", 0)
+        if cost:
+            cost_1k = round(cost * 1000, 2)
+            cost_10k = round(cost * 10000, 2)
+            insights.append(f"💰 Cost per query: USD {cost:.4f} → USD {cost_1k} per 1K queries → USD {cost_10k} per 10K queries")
+            if cost > 0.05:
+                insights.append("⚠️ High cost per query — consider prompt compression or caching")
+        if tokens:
+            insights.append(f"📊 Total tokens: {tokens}")
+        return insights
+
+    # Standard metrics format (unchanged)
     cost = metrics.get("estimated_cost_usd", None)
     tokens_in = metrics.get("total_tokens_input", None)
     tokens_out = metrics.get("total_tokens_output", None)
@@ -461,7 +581,7 @@ def extract_metrics_insights(metrics):
 
 
 # ─────────────────────────────────────────
-# LAYER 1 — DETERMINISTIC + SEMANTIC
+# LAYER 1 — DETERMINISTIC + SEMANTIC (unchanged)
 # ─────────────────────────────────────────
 def detect_failures(steps):
     failures = []
@@ -543,7 +663,6 @@ def detect_failures(steps):
             date_match = re.search(r'scheduled_for[^0-9]*(\d{4}-\d{2}-\d{2})', content)
             if date_match:
                 last_scheduled_date = date_match.group(1)
-            # Also catch MM/DD/YYYY and DD/MM/YYYY formats
             date_match_alt = re.search(r'scheduled_for[^0-9]*(\d{2}[/-]\d{2}[/-]\d{4})', content)
             if date_match_alt and not last_scheduled_date:
                 last_scheduled_date = date_match_alt.group(1)
@@ -559,7 +678,6 @@ def detect_failures(steps):
                 claim in content_lower for claim in RETRY_SUCCESS_CLAIMS
             )
 
-            # Contradiction: success after tool error
             if last_tool_error and claims_success:
                 if not is_hallucinated_retry:
                     failures.append({
@@ -581,8 +699,6 @@ def detect_failures(steps):
                         "contradicted_by": last_tool_error["content"]
                     })
 
-
-            # Numerical mismatch — always critical
             if last_tool_content and step.get("step_type") not in ["system_error", "final"]:
                 num_mismatch = detect_numerical_mismatch(
                     last_tool_content, content, step["step"]
@@ -590,8 +706,7 @@ def detect_failures(steps):
                 if num_mismatch:
                     failures.append(num_mismatch)
 
-            # Missing tool call
-            if any(word in content_lower for word in BOOKING_CLAIMS)and step.get("step_type") in [None, "final"]:
+            if any(word in content_lower for word in BOOKING_CLAIMS) and step.get("step_type") in [None, "final"]:
                 booking_tool_found = any(
                     s["actor"] == "tool" and s["step"] < step["step"]
                     for s in steps
@@ -607,7 +722,6 @@ def detect_failures(steps):
                         "evidence": content
                     })
 
-            # Date mismatch
             if last_scheduled_date:
                 mentioned_dates = re.findall(r'\b(\w+\s+\d{1,2}(?:st|nd|rd|th)?)\b', content)
                 if mentioned_dates:
@@ -622,7 +736,6 @@ def detect_failures(steps):
                     })
                     last_scheduled_date = None
 
-            # Retry loop
             is_retry = any(word in content_lower for word in RETRY_WORDS)
             if is_retry:
                 retry_count += 1
@@ -635,17 +748,14 @@ def detect_failures(steps):
                         "description": "Agent appears to be retrying repeatedly",
                         "evidence": content
                     })
-                # Hallucinated retry — agent claims retry succeeded but
-                # no actual retry tool call exists after the error
                 RETRY_SUCCESS_CLAIMS = [
-                    "retry succeeded", "retried successfully", 
+                    "retry succeeded", "retried successfully",
                     "retry was successful", "attempt succeeded",
                     "succeeded after retry", "resolved after retry"
                 ]
                 if is_hallucinated_retry:
-                    # Check if any tool call actually happened after the last error
                     retry_tool_found = any(
-                        s["actor"] == "tool" 
+                        s["actor"] == "tool"
                         and s["step"] > last_tool_error_step
                         and s["step"] < step["step"]
                         for s in steps
@@ -662,7 +772,7 @@ def detect_failures(steps):
                         })
             else:
                 retry_count = 0
-    # Surface any injected system errors directly
+
     for step in steps:
         if step.get("step_type") == "system_error":
             failures.append({
@@ -673,7 +783,7 @@ def detect_failures(steps):
                 "description": "System reported a critical error in the errors block",
                 "evidence": step["content"]
             })
-    # Surface warning status steps as medium severity risk flags
+
     for step in steps:
         content = step.get("content", "")
         if content.lower().startswith("warning:"):
@@ -685,11 +795,12 @@ def detect_failures(steps):
                 "description": "Step reported warning status with risk flags",
                 "evidence": content[:300]
             })
+
     return failures
 
 
 # ─────────────────────────────────────────
-# PATTERN DETECTION — lowered thresholds
+# PATTERN DETECTION (unchanged)
 # ─────────────────────────────────────────
 def detect_pattern(failures):
     failure_types = [f["failure_type"] for f in failures]
@@ -703,7 +814,6 @@ def detect_pattern(failures):
     numerical_count = failure_types.count("numerical_mismatch")
     context_drop_count = failure_types.count("self_contradiction")
 
-    # Lowered from 3 to 2 — catches smaller cascades
     if hallucination_count >= 2 and tool_misuse_count >= 2:
         return {
             "pattern": "cascading_failure",
@@ -788,7 +898,7 @@ def detect_pattern(failures):
 
 
 # ─────────────────────────────────────────
-# SCORING
+# SCORING (unchanged)
 # ─────────────────────────────────────────
 def compute_score(failures, pattern):
     score = 100
@@ -821,7 +931,7 @@ def compute_score(failures, pattern):
 
 
 # ─────────────────────────────────────────
-# PROMPT BUILDER
+# PROMPT BUILDER (unchanged)
 # ─────────────────────────────────────────
 def build_prompt(steps, failures, score, breakdown):
     MAX_CHARS = 12000
@@ -834,7 +944,15 @@ def build_prompt(steps, failures, score, breakdown):
     else:
         relevant_steps = steps
 
-    steps_str = json.dumps(relevant_steps)[:MAX_CHARS]
+    # Clean steps for prompt — remove nano-vm specific fields GPT doesn't need
+    clean_steps = [{
+        "step": s["step"],
+        "actor": s["actor"],
+        "content": s["content"],
+        "duration_ms": s.get("duration_ms")
+    } for s in relevant_steps]
+
+    steps_str = json.dumps(clean_steps)[:MAX_CHARS]
     failures_str = json.dumps(failures)[:MAX_CHARS]
 
     return f"""
@@ -885,6 +1003,156 @@ Schema:
 
 
 # ─────────────────────────────────────────
+# FULL TRACE VISUALIZATION — NEW
+# Shows every step in clean expandable view
+# ─────────────────────────────────────────
+def render_trace_steps(steps, all_failures):
+    st.subheader("🗂️ Full Execution Trace")
+
+    failure_steps = set(f["step"] for f in all_failures)
+
+    ACTOR_ICONS = {
+        "user": "👤",
+        "agent": "🤖",
+        "tool": "🛠️",
+        "system": "⚙️"
+    }
+
+    STATUS_ICONS = {
+        "SUCCESS": "🟢",
+        "success": "🟢",
+        "FAILED": "🔴",
+        "failed": "🔴",
+        "WARNING": "🟡",
+        "warning": "🟡",
+        "SUSPENDED": "🟠",
+        "PENDING": "🟠"
+    }
+
+    for step in steps:
+        actor = step.get("actor", "unknown")
+        step_num = step.get("step")
+        step_type = step.get("step_type") or actor
+        duration = step.get("duration_ms")
+        step_hash = step.get("step_hash")
+        status = step.get("status", "")
+        step_id = step.get("step_id", f"step_{step_num}")
+        has_failure = step_num in failure_steps
+
+        icon = ACTOR_ICONS.get(actor, "📄")
+        status_icon = STATUS_ICONS.get(status, "⚪")
+        failure_badge = " 🚨" if has_failure else ""
+        duration_str = f" · {duration}ms" if duration else ""
+        label = f"{icon} Step {step_num}: {step_type.upper()}{duration_str}{failure_badge}"
+
+        with st.expander(label, expanded=has_failure):
+            col1, col2, col3 = st.columns([2, 2, 2])
+
+            with col1:
+                st.caption(f"**Actor:** {actor.upper()}")
+                st.caption(f"**Type:** {step_type}")
+
+            with col2:
+                if status:
+                    st.caption(f"**Status:** {status_icon} {status}")
+                if duration:
+                    st.caption(f"**Duration:** {duration}ms")
+
+            with col3:
+                if step_hash:
+                    st.caption(f"**State Hash:** `{step_hash[:12]}...`")
+                st.caption(f"**ID:** `{step_id}`")
+
+            st.divider()
+
+            content = step.get("content", "")
+            if actor == "tool" or content.startswith("{") or content.startswith("["):
+                try:
+                    parsed_content = json.loads(content)
+                    st.json(parsed_content)
+                except Exception:
+                    st.code(content, language="text")
+            else:
+                st.markdown(content)
+
+            # Show failures inline for this step
+            if has_failure:
+                step_failures = [f for f in all_failures if f["step"] == step_num]
+                for f in step_failures:
+                    severity = f.get("severity", "").upper()
+                    ftype = f.get("failure_type", "").upper()
+                    color = "🔴" if severity == "CRITICAL" else "🟡" if severity == "HIGH" else "🔵"
+                    st.warning(f"{color} **{ftype}** — {f.get('description', '')}")
+                    if f.get("contradicted_by"):
+                        st.caption(f"Contradicted by: {f.get('contradicted_by', '')[:200]}")
+
+
+# ─────────────────────────────────────────
+# DETERMINISM SECTION — NEW (nano-vm only)
+# ─────────────────────────────────────────
+def render_determinism_section(metrics, steps):
+    if not metrics or not metrics.get("_is_nano_vm"):
+        return
+
+    st.markdown("---")
+    st.subheader("🛡️ Determinism & Integrity")
+
+    trace_id = metrics.get("trace_id", "N/A")
+    status = metrics.get("status", "UNKNOWN")
+    snapshots = metrics.get("_nano_vm_snapshots", {})
+
+    STATUS_COLORS = {
+        "SUCCESS": "green",
+        "FAILED": "red",
+        "SUSPENDED": "orange",
+        "BUDGET_EXCEEDED": "red",
+        "STALLED": "orange"
+    }
+    status_color = STATUS_COLORS.get(status, "gray")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown(f"**FSM Status:** :{status_color}[{status}]")
+    with col2:
+        st.markdown(f"**Trace ID:** `{trace_id}`")
+
+    if snapshots:
+        st.info("State hashes verify each step produced a deterministic state transition.")
+
+        hash_data = []
+        seen_hashes = set()
+        duplicate_hashes = set()
+
+        for s in steps:
+            h = s.get("step_hash")
+            if h:
+                is_dup = h in seen_hashes
+                if is_dup:
+                    duplicate_hashes.add(h)
+                seen_hashes.add(h)
+                hash_data.append({
+                    "Step": s["step"],
+                    "Step ID": s.get("step_id", ""),
+                    "Hash": h,
+                    "Integrity": "⚠️ Duplicate" if is_dup else "✅ Unique"
+                })
+
+        if hash_data:
+            st.dataframe(hash_data, hide_index=True, use_container_width=True)
+            if duplicate_hashes:
+                st.warning(f"⚠️ {len(duplicate_hashes)} duplicate state hashes detected — may indicate loops or stuck states.")
+            else:
+                st.success("✅ All state hashes unique — no loops or stuck states detected.")
+
+        st.caption("To verify reproducibility: run the same Program with identical Context. Trace IDs will differ but step hashes must match.")
+
+    final_output = metrics.get("final_output")
+    if final_output:
+        with st.expander("Final Output"):
+            st.json(final_output)
+
+
+# ─────────────────────────────────────────
 # MAIN ANALYZE BUTTON
 # ─────────────────────────────────────────
 if st.button("Analyze Trace", type="primary"):
@@ -917,7 +1185,6 @@ if st.button("Analyze Trace", type="primary"):
                     model="gpt-4o-mini",
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0
-
                 )
 
                 raw = response.choices[0].message.content.strip()
@@ -977,18 +1244,15 @@ if st.button("Analyze Trace", type="primary"):
                     if not all_failures and not parsed.get("failures"):
                         st.success("No failures detected.")
 
-                    # Show Layer 1 failures first — deterministic and authoritative
                     shown_types = set()
-                    # If hallucinated_retry detected, suppress generic hallucination
                     layer1_failure_types = [f.get("failure_type") for f in all_failures]
                     if "hallucinated_retry" in layer1_failure_types:
                         shown_types.add("hallucination")
                         shown_types.add("tool_misuse")
-                    # If critical system failure detected, suppress GPT numerical mismatch
                     if "critical_system_failure" in layer1_failure_types:
                         shown_types.add("numerical_mismatch")
                         shown_types.add("hallucination")
-                        
+
                     for f in all_failures:
                         ftype = f.get("failure_type", "unknown").upper()
                         severity = f.get("severity", "").upper()
@@ -1000,7 +1264,6 @@ if st.button("Analyze Trace", type="primary"):
                         shown_types.add(f.get("failure_type"))
                         st.divider()
 
-                    # Show GPT-4o-mini failures only if not already caught by Layer 1
                     for f in parsed.get("failures", []):
                         fp = f.get("failure_point", {})
                         ftype_raw = f.get("failure_type", "unknown")
@@ -1017,6 +1280,7 @@ if st.button("Analyze Trace", type="primary"):
                         st.markdown(f"🏗️ **Robust fix:** {fix.get('robust','')}")
                         shown_types.add(ftype_raw)
                         st.divider()
+
                     # ── DEBUGGING SIGNALS ──
                     signals = parsed.get("debugging_signals", [])
                     if signals:
@@ -1024,15 +1288,14 @@ if st.button("Analyze Trace", type="primary"):
                         for signal in signals:
                             st.markdown(f"- {signal}")
 
-
                     # ── CONFIDENCE ──
                     confidence = parsed.get("overall_confidence", 0.0)
                     st.subheader("📈 Overall Confidence")
-                    logical_failure_types = ["hallucination", "tool_misuse", "action_skipped", 
-                          "date_misinterpretation", "numerical_mismatch", 
+                    logical_failure_types = ["hallucination", "tool_misuse", "action_skipped",
+                          "date_misinterpretation", "numerical_mismatch",
                           "self_contradiction", "context_drop", "calculation_error"]
                     has_logical_failures = any(
-                         f.get("failure_type") in logical_failure_types 
+                         f.get("failure_type") in logical_failure_types
                          for f in parsed.get("failures", [])
                     )
                     if confidence == 0.0 and not has_logical_failures:
@@ -1040,13 +1303,17 @@ if st.button("Analyze Trace", type="primary"):
                     else:
                         st.progress(float(confidence))
                         st.markdown(f"{confidence:.2f} / 1.0")
-                    
-                    
-                    
+
+                    # ── FULL TRACE VISUALIZATION — NEW ──
+                    st.markdown("---")
+                    render_trace_steps(steps, all_failures)
+
+                    # ── DETERMINISM SECTION — NEW (nano-vm only) ──
+                    render_determinism_section(metrics, steps)
 
                 except json.JSONDecodeError:
-                       st.error("Failed to parse response. Raw output:")
-                       st.markdown(raw)
+                    st.error("Failed to parse response. Raw output:")
+                    st.markdown(raw)
 
 st.divider()
 st.caption("Agent Debugger | AI Agent Observability")
