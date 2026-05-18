@@ -585,6 +585,79 @@ def extract_metrics_insights(metrics):
 # ─────────────────────────────────────────
 # LAYER 1 — DETERMINISTIC + SEMANTIC (unchanged)
 # ─────────────────────────────────────────
+
+def detect_unverifiable_assertions(steps):
+    assertions = []
+
+    MECHANISM_CLAIMS = {
+        "retry_logic": [
+            "retry logic", "retry mechanism", "retry prevented",
+            "retry limit", "no retry", "retry policy"
+        ],
+        "loop_prevention": [
+            "loop prevention", "no infinite loop", "loop detected",
+            "loop guard", "cycle prevention", "infinite loop"
+        ],
+        "safeguard": [
+            "safeguard", "safety check", "safety mechanism",
+            "guard activated", "protection triggered"
+        ],
+        "error_handling": [
+            "error handling", "no errors occurred", "all errors caught",
+            "exception handled", "error recovery", "fault tolerance"
+        ],
+        "validation": [
+            "validation passed", "validated successfully",
+            "validation complete", "input validated", "output validated"
+        ],
+        "rollback": [
+            "rolled back", "rollback triggered", "rollback completed",
+            "state restored", "transaction rolled back"
+        ]
+    }
+
+    OBSERVABLE_INDICATORS = {
+        "retry_logic": ["retry", "attempt", "retrying", "backoff"],
+        "loop_prevention": ["loop", "cycle", "guard", "condition", "break"],
+        "safeguard": ["safeguard", "guard", "safety", "protection", "check"],
+        "error_handling": ["error", "exception", "catch", "recover", "fallback"],
+        "validation": ["valid", "check", "verify", "assert", "schema"],
+        "rollback": ["rollback", "revert", "restore", "undo", "cancel"]
+    }
+
+    for step in steps:
+        if step["actor"] != "agent":
+            continue
+
+        content = step["content"]
+        content_lower = content.lower()
+
+        for mechanism, claim_phrases in MECHANISM_CLAIMS.items():
+            claims_mechanism = any(phrase in content_lower for phrase in claim_phrases)
+            if not claims_mechanism:
+                continue
+
+            observable_indicators = OBSERVABLE_INDICATORS[mechanism]
+            evidence_found = any(
+                s["step"] < step["step"] and
+                s["actor"] in ["tool", "system"] and
+                any(ind in s["content"].lower() for ind in observable_indicators)
+                for s in steps
+            )
+
+            if not evidence_found:
+                assertions.append({
+                    "root_cause": "unverifiable_assertion",
+                    "failure_type": "unverifiable_assertion",
+                    "step": step["step"],
+                    "severity": "high",
+                    "description": f"Agent asserted {mechanism.replace('_', ' ')} executed but no observable trace evidence exists",
+                    "evidence": content[:300],
+                    "contradicted_by": "No corresponding observable step found in trace"
+                })
+
+    return assertions
+
 def detect_failures(steps):
     failures = []
     last_tool_error = None
@@ -798,6 +871,10 @@ def detect_failures(steps):
                 "evidence": content[:300]
             })
 
+    # Unverifiable assertion detection
+    unverifiable = detect_unverifiable_assertions(steps)
+    failures.extend(unverifiable)
+
     return failures
 
 
@@ -815,6 +892,7 @@ def detect_pattern(failures):
     latency_count = failure_types.count("performance_degradation")
     numerical_count = failure_types.count("numerical_mismatch")
     context_drop_count = failure_types.count("self_contradiction")
+    unverifiable_count = failure_types.count("unverifiable_assertion")
 
     if hallucination_count >= 2 and tool_misuse_count >= 2:
         return {
@@ -885,6 +963,16 @@ def detect_pattern(failures):
             "unique_failure_points": len(steps_affected),
             "total_instances": len(failures),
             "root_fix": "Agent must verify tool scheduled_for date matches requested date before confirming to user."
+        }
+    if unverifiable_count >= 1:
+        return {
+            "pattern": "unverifiable_assertion",
+            "label": "UNVERIFIABLE RUNTIME ASSERTION PATTERN",
+            "description": "Agent made claims about internal execution mechanisms with no observable trace evidence.",
+            "affected_steps": steps_affected,
+            "unique_failure_points": len(steps_affected),
+            "total_instances": len(failures),
+            "root_fix": "Agent must only assert outcomes directly observable in the execution trace. Internal mechanism claims require corresponding observable steps."
         }
     if latency_count >= 1:
         return {
