@@ -2,7 +2,6 @@ import streamlit as st
 import json
 import re
 from openai import OpenAI
-from typing import List, Dict, Any, Optional, Tuple
 
 st.set_page_config(page_title="Agent Debugger", page_icon="🔍", layout="wide")
 
@@ -550,7 +549,7 @@ def extract_metrics_insights(metrics):
         if cost:
             cost_1k = round(cost * 1000, 2)
             cost_10k = round(cost * 10000, 2)
-            insights.append(f"💰 Cost per query: USD {cost:.4f} → USD {cost_1k} per 1K queries → USD {cost_10k} per 10K queries")
+            insights.append("💰 Cost per query: USD {cost:.4f} → USD {cost_1k} per 1K queries → USD {cost_10k} per 10K queries")
             if cost > 0.05:
                 insights.append("⚠️ High cost per query — consider prompt compression or caching")
         if tokens:
