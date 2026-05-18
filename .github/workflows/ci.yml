@@ -27,4 +27,4 @@ jobs:
         run: ruff check app.py
 
       - name: Run pytest
-        run: pytest tests/ -v
+        run: PYTHONPATH=. pytest tests/ -v
