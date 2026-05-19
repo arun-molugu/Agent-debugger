@@ -392,7 +392,7 @@ def detect_numerical_mismatch(tool_content, agent_content, step_num):
             continue
         agent_vals = [float(n) for n in agent_numbers if n]
         agent_mentions_similar = any(
-            abs(abs(av) - abs(tool_val)) < abs(tool_val) * 1.5
+            abs(av - tool_val) < tool_val * 0.5
             for av in agent_vals
             if abs(av) > 10
         )
@@ -401,7 +401,7 @@ def detect_numerical_mismatch(tool_content, agent_content, step_num):
         exact_match = any(abs(av - tool_val) < 0.01 for av in agent_vals)
         if not exact_match:
             mismatched_val = next(
-                (av for av in agent_vals if abs(abs(av) - abs(tool_val)) < abs(tool_val) * 1.5),
+                (av for av in agent_vals if abs(av - tool_val) < tool_val * 0.5),
                 None
             )
             if mismatched_val:
