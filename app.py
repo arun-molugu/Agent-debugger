@@ -574,7 +574,7 @@ def extract_metrics_insights(metrics):
         ratio = round(tokens_in / tokens_out, 1) if tokens_out > 0 else 0
         insights.append(f"📊 Token usage: {tokens_in} input / {tokens_out} output (ratio {ratio}:1)")
         if tokens_in > 2000:
-            insights.append("⚠️ Large input context ({tokens_in} tokens) — consider summarizing earlier steps to reduce cost")
+            insights.append(f"⚠️ Large input context ({tokens_in} tokens) — consider summarizing earlier steps to reduce cost")
 
     if tool_calls is not None:
         insights.append(f"🔧 Tool calls made: {tool_calls}")
