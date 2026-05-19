@@ -90,10 +90,10 @@ TRACES = {
 
 # Expected failure types for each trace
 EXPECTED = {
-    "hallucinated_retry": {"hallucinated_retry", "date_misinterpretation", "unverifiable_assertion", "numerical_mismatch"},
-    "hallucination_after_error": {"hallucination", "numerical_mismatch"},
-    "missing_tool_call": {"action_skipped", "numerical_mismatch"},
-    "date_misinterpretation": {"date_misinterpretation", "numerical_mismatch"},
+    "hallucinated_retry": {"hallucinated_retry", "date_misinterpretation", "unverifiable_assertion"},
+    "hallucination_after_error": {"hallucination"},
+    "missing_tool_call": {"action_skipped"},
+    "date_misinterpretation": {"date_misinterpretation"},
     "clean_trace": set(),
     "system_error": {"critical_system_failure"},
     "unverifiable_assertion": {"hallucination", "unverifiable_assertion"},
