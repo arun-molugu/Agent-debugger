@@ -28,3 +28,6 @@ jobs:
 
       - name: Run pytest
         run: PYTHONPATH=. pytest tests/ -v
+
+      - name: Run stress test
+        run: PYTHONPATH=. python tests/stress_test.py
