@@ -63,8 +63,8 @@ def test_hallucinated_retry_detected():
 
 def test_numerical_mismatch_detected():
     result = detect_numerical_mismatch(
-        tool_content='{"temp": -15, "unit": "C"}',
-        agent_content="It is currently 15 degrees Celsius.",
+        tool_content='{"price": 150, "currency": "USD"}',
+        agent_content="The total comes to 120 dollars.",
         step_num=3
     )
     assert result is not None
