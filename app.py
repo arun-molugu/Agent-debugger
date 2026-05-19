@@ -566,7 +566,7 @@ def extract_metrics_insights(metrics):
     if cost:
         cost_1k = round(cost * 1000, 2)
         cost_10k = round(cost * 10000, 2)
-        insights.append("💰 Cost per query: USD {cost:.4f} → USD {cost_1k} per 1K queries → USD {cost_10k} per 10K queries")
+        insights.append(f"💰 Cost per query: USD {cost:.4f} → USD {cost_1k} per 1K queries → USD {cost_10k} per 10K queries")
         if cost > 0.05:
             insights.append("⚠️ High cost per query — consider prompt compression or caching repeated tool calls")
 
@@ -574,7 +574,7 @@ def extract_metrics_insights(metrics):
         ratio = round(tokens_in / tokens_out, 1) if tokens_out > 0 else 0
         insights.append(f"📊 Token usage: {tokens_in} input / {tokens_out} output (ratio {ratio}:1)")
         if tokens_in > 2000:
-            insights.append(f"⚠️ Large input context ({tokens_in} tokens) — consider summarizing earlier steps to reduce cost")
+            insights.append("⚠️ Large input context ({tokens_in} tokens) — consider summarizing earlier steps to reduce cost")
 
     if tool_calls is not None:
         insights.append(f"🔧 Tool calls made: {tool_calls}")
