@@ -274,11 +274,62 @@ def parse_raw_json_trace(raw_input):
     return steps, metrics
 
 
+
+# ─────────────────────────────────────────
+# MESSY LOG NORMALIZER — NEW
+# ─────────────────────────────────────────
+def normalize_messy_input(raw_input: str) -> str:
+    stripped = raw_input.strip()
+    
+    if stripped.startswith("{") or stripped.startswith("["):
+        return raw_input
+    
+    lines = stripped.split("\n")
+    line_format_count = sum(
+        1 for line in lines[:5] 
+        if line.strip() and ":" in line and 
+        line.split(":")[0].strip().lower() in ["user", "agent", "tool", "system"]
+    )
+    if line_format_count >= 2:
+        return raw_input
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{
+                "role": "user",
+                "content": f"""You are converting messy AI agent logs into a clean structured format.
+
+Convert the input below into this exact line format:
+user: <what the user said or requested>
+agent: <what the agent said, decided, or claimed>
+tool: <what a tool returned, including errors>
+
+Rules:
+- One line per event. Keep content concise but preserve key facts, numbers, and errors.
+- If something is an error, start with: tool: error - <description>
+- If the agent claimed success, write: agent: <the claim>
+- Preserve all numbers, dates, and status codes exactly.
+- If you cannot determine the actor, use agent: or tool: based on context.
+- Output ONLY the converted lines. No explanation. No headers.
+
+Input:
+{raw_input[:3000]}"""
+            }],
+            max_tokens=1000,
+            temperature=0
+        )
+        normalized = response.choices[0].message.content.strip()
+        return normalized
+    except Exception:
+        return raw_input
+
 # ─────────────────────────────────────────
 # SMART ENTRY POINT — nano-vm first
 # ─────────────────────────────────────────
 def parse_trace(trace_input):
     trace_input = trace_input.strip()
+    trace_input = normalize_messy_input(trace_input)
 
     # 1. Try nano-vm parser first
     try:
