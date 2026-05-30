@@ -280,19 +280,19 @@ def parse_raw_json_trace(raw_input):
 # ─────────────────────────────────────────
 def normalize_messy_input(raw_input: str) -> str:
     stripped = raw_input.strip()
-    
+
     if stripped.startswith("{") or stripped.startswith("["):
         return raw_input
-    
+
     lines = stripped.split("\n")
     line_format_count = sum(
-        1 for line in lines[:5] 
-        if line.strip() and ":" in line and 
-        line.split(":")[0].strip().lower() in ["user", "agent", "tool", "system"]
+        1 for line in lines[:5]
+        if line.strip() and ":" in line
+        and line.split(":")[0].strip().lower() in ["user", "agent", "tool", "system"]
     )
     if line_format_count >= 2:
         return raw_input
-    
+
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
