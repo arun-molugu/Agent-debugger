@@ -7,7 +7,7 @@ from openai import OpenAI
 st.set_page_config(page_title="Agent Debugger", page_icon="🔍", layout="wide")
 
 st.title("🔍 Agent Debugger")
-st.write("Paste any agent execution trace — nano-vm, raw JSON, or line format — to get an instant debugging report.")
+st.write("Paste broken agent logs, terminal output, LangChain/CrewAI traces, or just describe what went wrong. Get root cause + exact fix in seconds.")
 
 # ─────────────────────────────────────────
 # API KEY FROM BACKEND
@@ -57,7 +57,7 @@ elif plain_clicked:
     trace_input = SAMPLE_TRACES["plaintext"]
     st.info("Plain text sample loaded — hit Analyze Trace")
 else:
-    trace_input = st.text_area("Paste agent trace here", height=250)
+    trace_input = st.text_area("Paste logs, traces, or describe the failure", height=250)
 
 
 # ─────────────────────────────────────────
