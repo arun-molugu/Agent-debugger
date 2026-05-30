@@ -1495,4 +1495,4 @@ if st.button("Analyze Trace", type="primary"):
                     st.markdown(raw)
 
 st.divider()
-st.caption("Agent Debugger | AI Agent Observability")
+st.caption("🔒 Traces are not stored or logged. | Agent Debugger | AI Agent Observability")
