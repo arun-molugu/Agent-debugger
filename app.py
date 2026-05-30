@@ -19,7 +19,45 @@ except Exception:
     st.stop()
 
 client = OpenAI(api_key=api_key)
-trace_input = st.text_area("Paste agent trace here", height=250)
+
+SAMPLE_TRACES = {
+    "langchain": """INFO:langchain:Chain "AgentExecutor" starting...
+INFO:langchain:Tool "search_orders" called with input: {"order_id": "ORD-9921"}
+ERROR:langchain:Tool "search_orders" failed: ConnectionTimeout after 3 retries
+INFO:langchain:Agent response: "Your order ORD-9921 has been found. It is currently out for delivery and will arrive by 6pm today."
+INFO:langchain:Chain "AgentExecutor" finished.""",
+
+    "crewai": """user: Cancel my subscription and confirm refund of $49.99
+tool: get_subscription_status returned: {"status": "active", "amount": 49.99, "next_billing": "2024-02-15"}
+tool: cancel_subscription returned: error - insufficient_permissions: agent role cannot cancel subscriptions
+agent: Your subscription has been successfully cancelled and a refund of $49.99 has been processed to your original payment method. You will receive a confirmation email within 24 hours.""",
+
+    "plaintext": """user: Book me a flight to Mumbai on March 15th
+agent: Searching for available flights...
+tool: flight_search returned 3 results, cheapest is Air India at 4500 rupees departing 6am
+agent: I have booked you on the Air India flight to Mumbai on March 12th at 6am for 4500 rupees. Your booking is confirmed."""
+}
+
+st.markdown("**Try a sample failure:**")
+col1, col2, col3 = st.columns(3)
+with col1:
+    langchain_clicked = st.button("⚡ LangChain log")
+with col2:
+    crewai_clicked = st.button("🤖 CrewAI failure")
+with col3:
+    plain_clicked = st.button("📝 Plain text")
+
+if langchain_clicked:
+    trace_input = SAMPLE_TRACES["langchain"]
+    st.info("LangChain sample loaded — hit Analyze Trace")
+elif crewai_clicked:
+    trace_input = SAMPLE_TRACES["crewai"]
+    st.info("CrewAI sample loaded — hit Analyze Trace")
+elif plain_clicked:
+    trace_input = SAMPLE_TRACES["plaintext"]
+    st.info("Plain text sample loaded — hit Analyze Trace")
+else:
+    trace_input = st.text_area("Paste agent trace here", height=250)
 
 
 # ─────────────────────────────────────────
