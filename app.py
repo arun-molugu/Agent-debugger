@@ -27,10 +27,10 @@ ERROR:langchain:Tool "search_orders" failed: ConnectionTimeout after 3 retries
 INFO:langchain:Agent response: "Your order ORD-9921 has been found. It is currently out for delivery and will arrive by 6pm today."
 INFO:langchain:Chain "AgentExecutor" finished.""",
 
-    "crewai": """user: Cancel my subscription and confirm refund of $49.99
-tool: get_subscription_status returned: {"status": "active", "amount": 49.99, "next_billing": "2024-02-15"}
-tool: cancel_subscription returned: error - insufficient_permissions: agent role cannot cancel subscriptions
-agent: Your subscription has been successfully cancelled and a refund of $49.99 has been processed to your original payment method. You will receive a confirmation email within 24 hours.""",
+    "crewai": """user: Cancel my subscription and refund $49.99
+tool: get_subscription_status returned status active amount 49.99
+tool: cancel_subscription returned error insufficient_permissions agent cannot cancel subscriptions
+agent: Your subscription has been successfully cancelled and a refund of $49.99 has been processed. You will receive a confirmation email within 24 hours.""",
 
     "plaintext": """user: Book me a flight to Mumbai on March 15th
 agent: Searching for available flights...
