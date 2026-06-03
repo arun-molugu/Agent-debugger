@@ -38,26 +38,29 @@ tool: flight_search returned 3 results, cheapest is Air India at 4500 rupees dep
 agent: I have booked you on the Air India flight to Mumbai on March 12th at 6am for 4500 rupees. Your booking is confirmed."""
 }
 
+if "sample_trace" not in st.session_state:
+    st.session_state.sample_trace = ""
+
 st.markdown("**Try a sample failure:**")
 col1, col2, col3 = st.columns(3)
 with col1:
-    langchain_clicked = st.button("⚡ LangChain log")
+    if st.button("⚡ LangChain log"):
+        st.session_state.sample_trace = SAMPLE_TRACES["langchain"]
 with col2:
-    crewai_clicked = st.button("🤖 CrewAI failure")
+    if st.button("🤖 CrewAI failure"):
+        st.session_state.sample_trace = SAMPLE_TRACES["crewai"]
 with col3:
-    plain_clicked = st.button("📝 Plain text")
+    if st.button("📝 Plain text"):
+        st.session_state.sample_trace = SAMPLE_TRACES["plaintext"]
 
-if langchain_clicked:
-    trace_input = SAMPLE_TRACES["langchain"]
-    st.info("LangChain sample loaded — hit Analyze Trace")
-elif crewai_clicked:
-    trace_input = SAMPLE_TRACES["crewai"]
-    st.info("CrewAI sample loaded — hit Analyze Trace")
-elif plain_clicked:
-    trace_input = SAMPLE_TRACES["plaintext"]
-    st.info("Plain text sample loaded — hit Analyze Trace")
-else:
-    trace_input = st.text_area("Paste logs, traces, or describe the failure", height=250)
+if st.session_state.sample_trace:
+    st.info("Sample loaded — hit Analyze Trace")
+
+trace_input = st.text_area(
+    "Paste logs, traces, or describe the failure",
+    height=250,
+    value=st.session_state.sample_trace
+)
 
 
 # ─────────────────────────────────────────
