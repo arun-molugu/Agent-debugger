@@ -1164,6 +1164,26 @@ FAILURE DETECTION GUIDANCE:
 5. CONTEXT DROP: Agent contradicts itself or references information not in conversation. severity=critical
 6. DATA DISTORTION: Agent reports wrong values from tool output. severity=critical
 
+CAUSAL CHAIN REQUIREMENT — THIS IS MANDATORY:
+For every failure you identify, you MUST answer three questions in the likely_cause field:
+1. TRIGGER: What specific event caused this failure? (name the exact step and what it returned)
+2. PROPAGATION: How did that trigger lead to the bad outcome? (trace the chain step by step)
+3. PREVENTION: What single change would have stopped this? (be specific — name the exact code-level intervention)
+
+Example of WRONG likely_cause:
+"confirmed": "Agent claimed success after tool failure"
+
+Example of CORRECT likely_cause:
+"confirmed": "Tool at Step 2 returned ConnectionTimeout. Agent received no instruction to handle non-success status, so it proceeded with fabricated data. The failure propagated because there is no tool-output verification gate between the tool call and the agent response step."
+
+The quick fix must be a concrete code-level action, not a vague suggestion.
+WRONG: "Add error handling"
+CORRECT: "After every tool call, check if response contains error or status != success before allowing agent to proceed. If error detected, force agent to stop and report failure to user."
+
+The robust fix must be an architectural solution that prevents the entire class of failure.
+WRONG: "Improve the agent"
+CORRECT: "Implement a tool-output verification middleware that runs after every tool call and blocks agent progression if the tool response indicates failure, empty result, or unexpected schema."
+
 Schema:
 {{
   "timeline": [{{"step": 1, "actor": "User | Agent | Tool", "event": "string", "evidence": "exact quote"}}],
