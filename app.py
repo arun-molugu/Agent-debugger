@@ -1476,12 +1476,29 @@ if st.button("Analyze Trace", type="primary"):
                         color = "🔴" if severity == "CRITICAL" else "🟡" if severity == "HIGH" else "🔵"
                         st.markdown(f"{color} **{ftype}** — Step {fp.get('step','?')} — {severity}")
                         st.markdown(f"*Evidence:* {fp.get('evidence','')}")
-                        st.markdown(f"*Confirmed cause:* {f.get('likely_cause',{}).get('confirmed','')}")
+
+                        likely_cause = f.get('likely_cause', {})
+                        confirmed = likely_cause.get('confirmed', '')
+                        hypothesis = likely_cause.get('hypothesis', '')
+
+                        if confirmed:
+                            st.markdown("**🔎 Why this happened:**")
+                            st.info(confirmed)
+                        if hypothesis and hypothesis != "unknown":
+                            st.markdown("**🧪 Hypothesis:**")
+                            st.caption(hypothesis)
+
                         fix = f.get("suggested_fix", {})
-                        st.markdown(f"⚡ **Quick fix:** {fix.get('quick','')}")
-                        st.markdown(f"🏗️ **Robust fix:** {fix.get('robust','')}")
+                        quick = fix.get('quick', '')
+                        robust = fix.get('robust', '')
+                        if quick:
+                            st.markdown(f"⚡ **Quick fix:** {quick}")
+                        if robust:
+                            st.markdown(f"🏗️ **Robust fix:** {robust}")
+
                         shown_types.add(ftype_raw)
                         st.divider()
+
 
                     # ── DEBUGGING SIGNALS ──
                     signals = parsed.get("debugging_signals", [])
