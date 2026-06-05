@@ -1455,17 +1455,44 @@ if st.button("Analyze Trace", type="primary"):
                         shown_types.add("numerical_mismatch")
                         shown_types.add("hallucination")
 
+                    gpt_failures_by_type = {
+                        f.get("failure_type"): f
+                        for f in parsed.get("failures", [])
+                    }   
+
                     for f in all_failures:
-                        ftype = f.get("failure_type", "unknown").upper()
+                        ftype_raw = f.get("failure_type", "unknown")
+                        ftype = ftype_raw.upper()
                         severity = f.get("severity", "").upper()
                         color = "🔴" if severity == "CRITICAL" else "🟡" if severity == "HIGH" else "🔵"
                         st.markdown(f"{color} **{ftype}** — Step {f.get('step','?')} — {severity}")
                         st.markdown(f"*Evidence:* {f.get('evidence','')[:200]}")
                         if f.get('contradicted_by'):
                             st.markdown(f"*Contradicted by:* {f.get('contradicted_by','')[:200]}")
-                        shown_types.add(f.get("failure_type"))
+
+                        gpt_match = gpt_failures_by_type.get(ftype_raw)
+                        if gpt_match:
+                            likely_cause = gpt_match.get('likely_cause', {})
+                            confirmed = likely_cause.get('confirmed', '')
+                            hypothesis = likely_cause.get('hypothesis', '')
+                            fix = gpt_match.get('suggested_fix', {})
+                            quick = fix.get('quick', '')
+                            robust = fix.get('robust', '')
+                            if confirmed:
+                                st.markdown("**🔎 Why this happened:**")
+                                st.info(confirmed)
+                            if hypothesis and hypothesis != "unknown":
+                                st.markdown("**🧪 Hypothesis:**")
+                                st.caption(hypothesis)
+                            if quick:
+                                st.markdown(f"⚡ **Quick fix:** {quick}")
+                            if robust:
+                                st.markdown(f"🏗️ **Robust fix:** {robust}")
+                        
+                        shown_types.add(ftype_raw)
                         st.divider()
 
+                    
                     for f in parsed.get("failures", []):
                         fp = f.get("failure_point", {})
                         ftype_raw = f.get("failure_type", "unknown")
