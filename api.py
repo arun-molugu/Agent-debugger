@@ -7,19 +7,17 @@ Used by nano-vm-mcp integration and any external caller.
 import json
 import re
 import os
+import secrets
 
-from fastapi import FastAPI, HTTPException Security
+from fastapi import FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from openai import OpenAI
-import secrets
 
 from core import (
     detect_failures,
     detect_context_drops,
-    detect_numerical_mismatch,
-    detect_unverifiable_assertions,
 )
 
 app = FastAPI(title="Agent Debugger API", version="1.0.0")
@@ -51,6 +49,18 @@ class DiagnosticResponse(BaseModel):
     confidence: float
     debugging_signals: list
     trace_id: str | None = None
+
+
+# ─────────────────────────────────────────
+# AUTH CHECK
+# ─────────────────────────────────────────
+
+def verify_key(credentials: HTTPAuthorizationCredentials = Security(security)):
+    if not API_KEY:
+        raise HTTPException(status_code=500, detail="API key not configured")
+    if not secrets.compare_digest(credentials.credentials, API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    return credentials
 
 
 # ─────────────────────────────────────────
@@ -108,12 +118,17 @@ def detect_pattern(failures):
 def run_gpt_analysis(steps, failures, score):
     MAX_CHARS = 8000
     failed_steps = set(f["step"] for f in failures)
-    relevant = [s for s in steps if s["step"] in failed_steps
-                or s["step"] in {n - 1 for n in failed_steps}
-                or s["step"] in {n + 1 for n in failed_steps}]
+    relevant = [
+        s for s in steps
+        if s["step"] in failed_steps
+        or s["step"] in {n - 1 for n in failed_steps}
+        or s["step"] in {n + 1 for n in failed_steps}
+    ]
 
-    clean_steps = [{"step": s["step"], "actor": s["actor"],
-                    "content": s["content"]} for s in relevant]
+    clean_steps = [
+        {"step": s["step"], "actor": s["actor"], "content": s["content"]}
+        for s in relevant
+    ]
 
     prompt = f"""
 You are an AI agent debugging engine.
@@ -122,7 +137,7 @@ Return valid JSON only. No markdown. No commentary.
 Steps: {json.dumps(clean_steps)[:MAX_CHARS]}
 Detected Failures: {json.dumps(failures)[:MAX_CHARS]}
 
-For every failure, provide:
+For every failure provide:
 - TRIGGER: exact step and what it returned
 - PROPAGATION: how that caused the bad outcome
 - PREVENTION: specific code-level fix
@@ -212,10 +227,8 @@ def parse_nano_vm_trace(trace: dict):
 @app.post("/analyze", response_model=DiagnosticResponse)
 async def analyze_trace(
     request: TraceRequest,
-    credentials: HTTPAuthorizationCredentials = Security(security)
+    credentials: HTTPAuthorizationCredentials = Security(verify_key),
 ):
-    if not secrets.compare_digest(credentials.credentials, API_KEY):
-        raise HTTPException(status_code=401, detail="Invalid API key")
     try:
         steps, trace_id, status = parse_nano_vm_trace(request.trace)
     except Exception as e:
