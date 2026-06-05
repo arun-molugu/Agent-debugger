@@ -10,8 +10,10 @@ import os
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from openai import OpenAI
+import secrets
 
 from core import (
     detect_failures,
@@ -30,6 +32,8 @@ app.add_middleware(
 )
 
 client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+API_KEY = os.environ.get("AGENT_DEBUGGER_API_KEY", "")
+security = HTTPBearer()
 
 
 # ─────────────────────────────────────────
@@ -206,7 +210,12 @@ def parse_nano_vm_trace(trace: dict):
 # ─────────────────────────────────────────
 
 @app.post("/analyze", response_model=DiagnosticResponse)
-async def analyze_trace(request: TraceRequest):
+async def analyze_trace(
+    request: TraceRequest,
+    credentials: HTTPAuthorizationCredentials = Security(security)
+):
+    if not secrets.compare_digest(credentials.credentials, API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid API key")
     try:
         steps, trace_id, status = parse_nano_vm_trace(request.trace)
     except Exception as e:
