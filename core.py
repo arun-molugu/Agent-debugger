@@ -344,6 +344,90 @@ def detect_failures(steps):
                 "evidence": content[:300]
             })
 
+def detect_latency_issues(steps):
+    latency_failures = []
+    is_nano_vm_trace = any(s.get("step_hash") is not None for s in steps)
+    EXPECTED_MAX_MS = {
+        "tool": 2000,
+        "llm": 1500,
+        "condition": 50,
+        "parallel": 5000,
+        "tool_call": 2000,
+        "reasoning": 1500,
+        "memory_lookup": 500,
+        "final": 3000
+    }
+    durations_by_type = {}
+    for step in steps:
+        duration = step.get("duration_ms")
+        step_type = step.get("step_type")
+        if not duration or duration == 0:
+            continue
+        lookup_type = step_type
+        if step_type in ["llm", "reasoning"]:
+            lookup_type = "llm"
+        elif step_type in ["tool", "tool_call"]:
+            lookup_type = "tool"
+        if lookup_type not in durations_by_type:
+            durations_by_type[lookup_type] = []
+        durations_by_type[lookup_type].append((step["step"], duration))
+    for step_type, entries in durations_by_type.items():
+        if not entries:
+            continue
+        durations = [d for _, d in entries]
+        avg_duration = sum(durations) / len(durations)
+        expected_max = EXPECTED_MAX_MS.get(step_type, 10000)
+        for step_num, duration in entries:
+            multiplier = 1.3 if is_nano_vm_trace else 1.5
+            is_outlier = len(durations) > 1 and duration > avg_duration * multiplier
+            exceeds_expected = duration > expected_max
+            if is_outlier or exceeds_expected:
+                step_content = next(
+                    (s["content"] for s in steps if s["step"] == step_num), ""
+                )
+                latency_failures.append({
+                    "root_cause": "latency_bottleneck",
+                    "failure_type": "performance_degradation",
+                    "step": step_num,
+                    "severity": "high" if duration > expected_max * 1.5 else "medium",
+                    "description": f"Step took {duration}ms — above expected {expected_max}ms for {step_type}",
+                    "evidence": step_content[:200],
+                    "duration_ms": duration,
+                    "avg_duration_ms": round(avg_duration),
+                    "expected_max_ms": expected_max
+                })
+    return latency_failures
+
+
+def detect_nano_vm_failures(steps):
+    failures = []
+    retry_counts = {}
+    for step in steps:
+        step_id = step.get("step_id", "")
+        status = step.get("status", "")
+        content = step.get("content", "")
+        duration = step.get("duration_ms", 0)
+        if status in ["FAILED", "failed"] or "FAIL:" in content:
+            retry_counts[step_id] = retry_counts.get(step_id, 0) + 1
+            failures.append({
+                "root_cause": "tool_failure",
+                "failure_type": "tool_misuse",
+                "step": step["step"],
+                "severity": "high",
+                "description": f"Step {step_id} failed with status {status}: {content[:200]}",
+                "evidence": content
+            })
+            if retry_counts[step_id] >= 2:
+                failures.append({
+                    "root_cause": "logic_failure",
+                    "failure_type": "retry_loop",
+                    "step": step["step"],
+                    "severity": "critical",
+                    "description": f"Step {step_id} failed {retry_counts[step_id]} times — retry storm detected",
+                    "evidence": content
+                })
+    return failures
+    
     unverifiable = detect_unverifiable_assertions(steps)
     failures.extend(unverifiable)
 
