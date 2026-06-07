@@ -18,6 +18,8 @@ from openai import OpenAI
 from core import (
     detect_failures,
     detect_context_drops,
+    detect_latency_issues,
+    detect_nano_vm_failures,
 )
 
 app = FastAPI(title="Agent Debugger API", version="1.0.0")
@@ -239,7 +241,9 @@ async def analyze_trace(
 
     failures = detect_failures(steps)
     context_failures = detect_context_drops(steps)
-    all_failures = failures + context_failures
+    latency_failures = detect_latency_issues(steps)
+    nano_failures = detect_nano_vm_failures(steps)
+    all_failures = failures + context_failures + latency_failures + nano_failures
 
     score = compute_score(all_failures)
     pattern = detect_pattern(all_failures)
