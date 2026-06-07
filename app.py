@@ -1490,6 +1490,8 @@ if st.button("Analyze Trace", type="primary"):
                                 st.markdown(f"🏗️ **Robust fix:** {robust}")
                         
                         shown_types.add(ftype_raw)
+                        
+
                         st.divider()
 
                     
