@@ -1459,7 +1459,6 @@ if st.button("Analyze Trace", type="primary"):
                         f.get("failure_type"): f
                         for f in parsed.get("failures", [])
                     }   
-
                     for f in all_failures:
                         ftype_raw = f.get("failure_type", "unknown")
                         ftype = ftype_raw.upper()
@@ -1469,7 +1468,6 @@ if st.button("Analyze Trace", type="primary"):
                         st.markdown(f"*Evidence:* {f.get('evidence','')[:200]}")
                         if f.get('contradicted_by'):
                             st.markdown(f"*Contradicted by:* {f.get('contradicted_by','')[:200]}")
-
                         gpt_match = gpt_failures_by_type.get(ftype_raw)
                         if gpt_match:
                             likely_cause = gpt_match.get('likely_cause', {})
