@@ -1500,6 +1500,11 @@ if st.button("Analyze Trace", type="primary"):
                     confidence = parsed.get("overall_confidence", 0.0)
                     st.subheader("📈 Overall Confidence")
                     logical_failure_type
+                
+                except json.JSONDecodeError:
+                    st.error("Failed to parse response. Raw output:")
+                    st.markdown(raw)
+
 
 st.divider()
 st.caption("🔒 Traces are not stored or logged. | Agent Debugger | AI Agent Observability")
