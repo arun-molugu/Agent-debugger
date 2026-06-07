@@ -1496,15 +1496,28 @@ if st.button("Analyze Trace", type="primary"):
                         st.subheader("🔍 Debugging Signals")
                         for signal in signals:
                             st.markdown(f"- {signal}")
-
                     confidence = parsed.get("overall_confidence", 0.0)
                     st.subheader("📈 Overall Confidence")
-                    logical_failure_type
-                
+                    logical_failure_types = ["hallucination", "tool_misuse", "action_skipped",
+                                             "date_misinterpretation", "numerical_mismatch",
+                                             "self_contradiction", "context_drop", "calculation_error"]
+                    has_logical_failures = any(
+                        f.get("failure_type") in logical_failure_types
+                        for f in parsed.get("failures", [])
+                    )
+                    if confidence == 0.0 and not has_logical_failures:
+                        st.info("N/A — performance issues only, no logical failures detected")
+                    else:
+                        st.progress(float(confidence))
+                        st.markdown(f"{confidence:.2f} / 1.0")
+
+                    st.markdown("---")
+                    render_trace_steps(steps, all_failures)
+                    render_determinism_section(metrics, steps)
+
                 except json.JSONDecodeError:
                     st.error("Failed to parse response. Raw output:")
                     st.markdown(raw)
-
 
 st.divider()
 st.caption("🔒 Traces are not stored or logged. | Agent Debugger | AI Agent Observability")
