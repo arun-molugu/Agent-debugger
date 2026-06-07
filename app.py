@@ -89,7 +89,6 @@ def parse_nano_vm_trace(raw_input: str):
     steps_raw = trace_obj.get("steps", [])
     snapshots_raw = trace_obj.get("state_snapshots", [])
 
-    # Build snapshot map for O(1) lookup
     snapshot_map = {}
     for item in snapshots_raw:
         if isinstance(item, (list, tuple)) and len(item) == 2:
@@ -159,7 +158,7 @@ def parse_nano_vm_trace(raw_input: str):
 
 
 # ─────────────────────────────────────────
-# RAW JSON TRACE PARSER (unchanged)
+# RAW JSON TRACE PARSER
 # ─────────────────────────────────────────
 def parse_raw_json_trace(raw_input):
     if isinstance(raw_input, str):
@@ -175,7 +174,6 @@ def parse_raw_json_trace(raw_input):
     else:
         parsed = raw_input
 
-    # Extract metrics if present at top level
     metrics = None
     top_level_errors = []
     if isinstance(parsed, dict):
@@ -315,9 +313,8 @@ def parse_raw_json_trace(raw_input):
     return steps, metrics
 
 
-
 # ─────────────────────────────────────────
-# MESSY LOG NORMALIZER — NEW
+# MESSY LOG NORMALIZER
 # ─────────────────────────────────────────
 def normalize_messy_input(raw_input: str) -> str:
     stripped = raw_input.strip()
@@ -365,6 +362,7 @@ Input:
     except Exception:
         return raw_input
 
+
 # ─────────────────────────────────────────
 # SMART ENTRY POINT — nano-vm first
 # ─────────────────────────────────────────
@@ -372,23 +370,19 @@ def parse_trace(trace_input):
     trace_input = trace_input.strip()
     trace_input = normalize_messy_input(trace_input)
 
-    # 1. Try nano-vm parser first
     try:
         if '"trace_id"' in trace_input and '"steps"' in trace_input and '"vm_version"' not in trace_input:
-            # Additional check: nano-vm traces have simple step types (llm, tool, condition, parallel)
             if any(t in trace_input for t in ['"type": "llm"', '"type": "tool"', '"type": "condition"', '"type": "parallel"']):
                 steps, metrics = parse_nano_vm_trace(trace_input)
                 return steps, metrics
     except Exception:
         pass
 
-    # 2. Try legacy JSON parser
     try:
         return parse_raw_json_trace(trace_input)
     except Exception:
         pass
 
-    # 3. Line-by-line fallback with multiline JSON support (unchanged)
     steps = []
     lines = trace_input.split("\n")
     i = 0
@@ -432,7 +426,7 @@ def parse_trace(trace_input):
 
 
 # ─────────────────────────────────────────
-# SEMANTIC CHECKER (unchanged)
+# SEMANTIC CHECKER
 # ─────────────────────────────────────────
 def semantic_check_tool_failure(content):
     try:
@@ -462,7 +456,7 @@ Answer (FAILED or SUCCESS only):"""
 
 
 # ─────────────────────────────────────────
-# NUMERICAL MISMATCH DETECTION (unchanged)
+# NUMERICAL MISMATCH DETECTION
 # ─────────────────────────────────────────
 def extract_numbers(text):
     return [n.rstrip('.') for n in re.findall(r'-?\d+\.?\d*', text)]
@@ -510,7 +504,7 @@ def detect_numerical_mismatch(tool_content, agent_content, step_num):
 
 
 # ─────────────────────────────────────────
-# CONTEXT DROP DETECTION (unchanged)
+# CONTEXT DROP DETECTION
 # ─────────────────────────────────────────
 def detect_context_drops(steps):
     context_failures = []
@@ -557,12 +551,11 @@ def detect_context_drops(steps):
 
 
 # ─────────────────────────────────────────
-# LATENCY DETECTION — nano-vm aware
+# LATENCY DETECTION
 # ─────────────────────────────────────────
 def detect_latency_issues(steps):
     latency_failures = []
 
-    # Detect if this is a nano-vm trace
     is_nano_vm_trace = any(s.get("step_hash") is not None for s in steps)
 
     EXPECTED_MAX_MS = {
@@ -602,7 +595,6 @@ def detect_latency_issues(steps):
         expected_max = EXPECTED_MAX_MS.get(step_type, 10000)
 
         for step_num, duration in entries:
-            # Tighter threshold for nano-vm (1.3x) since VM overhead is near zero
             multiplier = 1.3 if is_nano_vm_trace else 1.5
             is_outlier = len(durations) > 1 and duration > avg_duration * multiplier
             exceeds_expected = duration > expected_max
@@ -627,7 +619,7 @@ def detect_latency_issues(steps):
 
 
 # ─────────────────────────────────────────
-# METRICS EXTRACTION — nano-vm aware
+# METRICS EXTRACTION
 # ─────────────────────────────────────────
 def extract_metrics_insights(metrics):
     if not metrics:
@@ -635,7 +627,6 @@ def extract_metrics_insights(metrics):
 
     insights = []
 
-    # nano-vm metrics format
     if metrics.get("_is_nano_vm"):
         cost = metrics.get("total_cost_usd", 0)
         tokens = metrics.get("total_tokens", 0)
@@ -649,7 +640,6 @@ def extract_metrics_insights(metrics):
             insights.append(f"📊 Total tokens: {tokens}")
         return insights
 
-    # Standard metrics format (unchanged)
     cost = metrics.get("estimated_cost_usd", None)
     tokens_in = metrics.get("total_tokens_input", None)
     tokens_out = metrics.get("total_tokens_output", None)
@@ -675,9 +665,8 @@ def extract_metrics_insights(metrics):
 
 
 # ─────────────────────────────────────────
-# LAYER 1 — DETERMINISTIC + SEMANTIC (unchanged)
+# LAYER 1 — DETERMINISTIC + SEMANTIC
 # ─────────────────────────────────────────
-
 def detect_unverifiable_assertions(steps):
     assertions = []
 
@@ -749,6 +738,7 @@ def detect_unverifiable_assertions(steps):
                 })
 
     return assertions
+
 
 def detect_failures(steps):
     failures = []
@@ -963,7 +953,6 @@ def detect_failures(steps):
                 "evidence": content[:300]
             })
 
-    # Unverifiable assertion detection
     unverifiable = detect_unverifiable_assertions(steps)
     failures.extend(unverifiable)
 
@@ -971,7 +960,7 @@ def detect_failures(steps):
 
 
 # ─────────────────────────────────────────
-# PATTERN DETECTION (unchanged)
+# PATTERN DETECTION
 # ─────────────────────────────────────────
 def detect_pattern(failures):
     failure_types = [f["failure_type"] for f in failures]
@@ -1080,7 +1069,7 @@ def detect_pattern(failures):
 
 
 # ─────────────────────────────────────────
-# SCORING (unchanged)
+# SCORING
 # ─────────────────────────────────────────
 def compute_score(failures, pattern):
     score = 100
@@ -1113,7 +1102,7 @@ def compute_score(failures, pattern):
 
 
 # ─────────────────────────────────────────
-# PROMPT BUILDER (unchanged)
+# PROMPT BUILDER
 # ─────────────────────────────────────────
 def build_prompt(steps, failures, score, breakdown):
     MAX_CHARS = 12000
@@ -1126,7 +1115,6 @@ def build_prompt(steps, failures, score, breakdown):
     else:
         relevant_steps = steps
 
-    # Clean steps for prompt — remove nano-vm specific fields GPT doesn't need
     clean_steps = [{
         "step": s["step"],
         "actor": s["actor"],
@@ -1205,8 +1193,7 @@ Schema:
 
 
 # ─────────────────────────────────────────
-# FULL TRACE VISUALIZATION — NEW
-# Shows every step in clean expandable view
+# FULL TRACE VISUALIZATION
 # ─────────────────────────────────────────
 def render_trace_steps(steps, all_failures):
     st.subheader("🗂️ Full Execution Trace")
@@ -1277,7 +1264,6 @@ def render_trace_steps(steps, all_failures):
             else:
                 st.markdown(content)
 
-            # Show failures inline for this step
             if has_failure:
                 step_failures = [f for f in all_failures if f["step"] == step_num]
                 for f in step_failures:
@@ -1290,7 +1276,7 @@ def render_trace_steps(steps, all_failures):
 
 
 # ─────────────────────────────────────────
-# DETERMINISM SECTION — NEW (nano-vm only)
+# DETERMINISM SECTION (nano-vm only)
 # ─────────────────────────────────────────
 def render_determinism_section(metrics, steps):
     if not metrics or not metrics.get("_is_nano_vm"):
@@ -1367,16 +1353,9 @@ if st.button("Analyze Trace", type="primary"):
             if not steps:
                 st.error("Could not parse trace. Make sure it is valid JSON or line format (actor: content).")
             else:
-                # Layer 1 — deterministic + semantic
                 failures = detect_failures(steps)
-
-                # Context drop detection
                 context_failures = detect_context_drops(steps)
-
-                # Latency detection
                 latency_failures = detect_latency_issues(steps)
-
-                # Merge all failures
                 all_failures = failures + context_failures + latency_failures
 
                 pattern = detect_pattern(all_failures)
@@ -1399,7 +1378,6 @@ if st.button("Analyze Trace", type="primary"):
                 try:
                     parsed = json.loads(raw)
 
-                    # Adjust score for GPT-4o-mini findings Layer 1 missed
                     gpt_failures = parsed.get("failures", [])
                     layer1_types = [f.get("failure_type") for f in all_failures]
                     gpt_only_failures = [f for f in gpt_failures if f.get("failure_type") not in layer1_types]
@@ -1408,7 +1386,6 @@ if st.button("Analyze Trace", type="primary"):
                         penalty = {"critical": 30, "high": 20, "medium": 15, "low": 5}.get(severity, 15)
                         score = max(score - penalty, 10)
 
-                    # ── SCORE ──
                     st.subheader("📊 Reliability Score")
                     if score < 40:
                         st.error(f"Score: {score}/100 🔴 CRITICAL")
@@ -1417,14 +1394,12 @@ if st.button("Analyze Trace", type="primary"):
                     else:
                         st.success(f"Score: {score}/100 🟢 OK")
 
-                    # ── METRICS ──
                     metrics_insights = extract_metrics_insights(metrics)
                     if metrics_insights:
                         st.subheader("💡 Cost & Efficiency Insights")
                         for insight in metrics_insights:
                             st.markdown(insight)
 
-                    # ── LATENCY ──
                     if latency_failures:
                         st.subheader("⚡ Latency Bottlenecks")
                         for lf in latency_failures:
@@ -1433,7 +1408,6 @@ if st.button("Analyze Trace", type="primary"):
                                 f"(expected max {lf['expected_max_ms']}ms) — {lf['description']}"
                             )
 
-                    # ── PATTERN ──
                     if pattern:
                         st.subheader("🚨 Core Failure Pattern")
                         st.error(f"**{pattern['label']}**")
@@ -1441,7 +1415,6 @@ if st.button("Analyze Trace", type="primary"):
                         st.markdown(f"**Affected steps:** {pattern['affected_steps']}")
                         st.markdown(f"**Root fix:** {pattern['root_fix']}")
 
-                    # ── FAILURES ──
                     st.subheader("📍 Failures Detected")
                     if not all_failures and not parsed.get("failures"):
                         st.success("No failures detected.")
@@ -1458,7 +1431,7 @@ if st.button("Analyze Trace", type="primary"):
                     gpt_failures_by_type = {
                         f.get("failure_type"): f
                         for f in parsed.get("failures", [])
-                    }   
+                    }
                     for f in all_failures:
                         ftype_raw = f.get("failure_type", "unknown")
                         ftype = ftype_raw.upper()
@@ -1486,13 +1459,9 @@ if st.button("Analyze Trace", type="primary"):
                                 st.markdown(f"⚡ **Quick fix:** {quick}")
                             if robust:
                                 st.markdown(f"🏗️ **Robust fix:** {robust}")
-                        
                         shown_types.add(ftype_raw)
-                        
-
                         st.divider()
 
-                    
                     for f in parsed.get("failures", []):
                         fp = f.get("failure_point", {})
                         ftype_raw = f.get("failure_type", "unknown")
@@ -1503,18 +1472,15 @@ if st.button("Analyze Trace", type="primary"):
                         color = "🔴" if severity == "CRITICAL" else "🟡" if severity == "HIGH" else "🔵"
                         st.markdown(f"{color} **{ftype}** — Step {fp.get('step','?')} — {severity}")
                         st.markdown(f"*Evidence:* {fp.get('evidence','')}")
-
                         likely_cause = f.get('likely_cause', {})
                         confirmed = likely_cause.get('confirmed', '')
                         hypothesis = likely_cause.get('hypothesis', '')
-
                         if confirmed:
                             st.markdown("**🔎 Why this happened:**")
                             st.info(confirmed)
                         if hypothesis and hypothesis != "unknown":
                             st.markdown("**🧪 Hypothesis:**")
                             st.caption(hypothesis)
-
                         fix = f.get("suggested_fix", {})
                         quick = fix.get('quick', '')
                         robust = fix.get('robust', '')
@@ -1522,44 +1488,18 @@ if st.button("Analyze Trace", type="primary"):
                             st.markdown(f"⚡ **Quick fix:** {quick}")
                         if robust:
                             st.markdown(f"🏗️ **Robust fix:** {robust}")
-
                         shown_types.add(ftype_raw)
                         st.divider()
 
-
-                    # ── DEBUGGING SIGNALS ──
                     signals = parsed.get("debugging_signals", [])
                     if signals:
                         st.subheader("🔍 Debugging Signals")
                         for signal in signals:
                             st.markdown(f"- {signal}")
 
-                    # ── CONFIDENCE ──
                     confidence = parsed.get("overall_confidence", 0.0)
                     st.subheader("📈 Overall Confidence")
-                    logical_failure_types = ["hallucination", "tool_misuse", "action_skipped",
-                          "date_misinterpretation", "numerical_mismatch",
-                          "self_contradiction", "context_drop", "calculation_error"]
-                    has_logical_failures = any(
-                         f.get("failure_type") in logical_failure_types
-                         for f in parsed.get("failures", [])
-                    )
-                    if confidence == 0.0 and not has_logical_failures:
-                        st.info("N/A — performance issues only, no logical failures detected")
-                    else:
-                        st.progress(float(confidence))
-                        st.markdown(f"{confidence:.2f} / 1.0")
-
-                    # ── FULL TRACE VISUALIZATION — NEW ──
-                    st.markdown("---")
-                    render_trace_steps(steps, all_failures)
-
-                    # ── DETERMINISM SECTION — NEW (nano-vm only) ──
-                    render_determinism_section(metrics, steps)
-
-                except json.JSONDecodeError:
-                    st.error("Failed to parse response. Raw output:")
-                    st.markdown(raw)
+                    logical_failure_type
 
 st.divider()
 st.caption("🔒 Traces are not stored or logged. | Agent Debugger | AI Agent Observability")
