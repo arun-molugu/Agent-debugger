@@ -412,27 +412,19 @@ def detect_nano_vm_failures(steps):
         step_id = step.get("step_id", "")
         status = step.get("status", "")
         content = step.get("content", "")
-        duration = step.get("duration_ms", 0)
         if status in ["FAILED", "failed"] or "FAIL:" in content:
             retry_counts[step_id] = retry_counts.get(step_id, 0) + 1
-            failures.append({
-                "root_cause": "tool_failure",
-                "failure_type": "tool_misuse",
-                "step": step["step"],
-                "severity": "high",
-                "description": f"Step {step_id} failed with status {status}: {content[:200]}",
-                "evidence": content
-            })
             if retry_counts[step_id] >= 2:
                 failures.append({
                     "root_cause": "logic_failure",
-                    "failure_type": "retry_loop",
+                    "failure_type": "retry_storm",
                     "step": step["step"],
                     "severity": "critical",
-                    "description": f"Step {step_id} failed {retry_counts[step_id]} times — retry storm detected",
+                    "description": f"Step {step_id} returned FSM sentinel {content[:100]} and failed {retry_counts[step_id]} times with no SUCCESS — retry storm detected",
                     "evidence": content
                 })
     return failures
+    
     
     unverifiable = detect_unverifiable_assertions(steps)
     failures.extend(unverifiable)
