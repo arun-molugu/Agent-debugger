@@ -343,6 +343,12 @@ def detect_failures(steps):
                 "description": "Step reported warning status with risk flags",
                 "evidence": content[:300]
             })
+    
+    unverifiable = detect_unverifiable_assertions(steps)
+    failures.extend(unverifiable)
+    
+    return failures
+
 
 def detect_latency_issues(steps):
     latency_failures = []
