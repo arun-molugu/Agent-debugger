@@ -239,10 +239,10 @@ async def analyze_trace(
     if not steps:
         raise HTTPException(status_code=400, detail="No steps found in trace")
 
-    failures = detect_failures(steps)
-    context_failures = detect_context_drops(steps)
-    latency_failures = detect_latency_issues(steps)
-    nano_failures = detect_nano_vm_failures(steps)
+    failures = detect_failures(steps) or []
+    context_failures = detect_context_drops(steps) or []
+    latency_failures = detect_latency_issues(steps) or []
+    nano_failures = detect_nano_vm_failures(steps) or []
     all_failures = failures + context_failures + latency_failures + nano_failures
 
     score = compute_score(all_failures)
