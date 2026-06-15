@@ -272,6 +272,15 @@ async def analyze_trace(
 # HEALTH CHECK
 # ─────────────────────────────────────────
 
+@app.get("/")
+async def root():
+    return {
+        "service": "Agent Debugger API",
+        "docs": "/docs",
+        "health": "/health",
+        "analyze": "POST /analyze"
+    }
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "agent-debugger-api"}
