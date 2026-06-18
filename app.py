@@ -1143,6 +1143,8 @@ CRITICAL RULES:
 - Quick fix implementable in under 1 hour.
 - Robust fix is a systemic architectural solution.
 - Response must be valid JSON.
+- If Detected Failures is an empty list, Layer 1 found no deterministic evidence of a failure. In this case, only add a new failure if it is unambiguous and directly contradicts an explicit tool-returned value or status. Do not flag an agent's correct refusal to act, a correct halt decision, or a decision that matches the user's stated condition — these are correct behavior, not failures.
+- An agent restating or paraphrasing a tool's status value in plain English (e.g. quoting "in_transit" back to the user) is NOT a numerical or calculation error unless it reports a different number or status than the tool actually returned.
 
 FAILURE DETECTION GUIDANCE:
 1. MISSING TOOL CALL: Agent claims completion without calling required tool. severity=critical
