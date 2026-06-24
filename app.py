@@ -106,10 +106,10 @@ def parse_nano_vm_trace(raw_input: str):
         error = step_data.get("error", None)
         status_step = step_data.get("status", "SUCCESS")
 
-        if step_type == "llm":
+        if step_type in ["llm", "reasoning"]:
             actor = "agent"
             content = str(output)
-        elif step_type == "tool":
+        elif step_type in ["tool", "tool_call"]:
             actor = "tool"
             if isinstance(output, (dict, list)):
                 content = json.dumps(output, indent=2)
