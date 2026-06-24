@@ -806,9 +806,29 @@ def detect_failures(steps):
         content = step["content"]
         content_lower = content.lower()
 
+        if step.get("status") in ["skipped", "SKIPPED"] and actor == "tool":
+            failures.append({
+                "root_cause": "missing_tool_call",
+                "failure_type": "action_skipped",
+                "step": step["step"],
+                "severity": "critical",
+                "description": "Tool call was skipped — agent bypassed required tool execution",
+                "evidence": content or "No output"
+            })
+
         if actor == "tool":
             is_clear_error = any(word in content_lower for word in CLEAR_ERROR_WORDS)
             is_ambiguous = any(signal in content_lower for signal in AMBIGUOUS_SIGNALS)
+
+            if not content.strip():
+                failures.append({
+                    "root_cause": "missing_tool_call",
+                    "failure_type": "action_skipped",
+                    "step": step["step"],
+                    "severity": "critical",
+                    "description": "Tool was called but returned empty output",
+                    "evidence": "Empty tool response"
+                })
 
             if is_clear_error:
                 last_tool_error = step
@@ -823,130 +843,142 @@ def detect_failures(steps):
                         "description": "Tool returned a permission or authorization failure",
                         "evidence": content
                     })
-            elif is_ambiguous:
-                semantic_result = semantic_check_tool_failure(content)
-                if semantic_result is True:
-                    last_tool_error = step
-                    last_tool_content = content
+
+                elif is_ambiguous:
+                    semantic_result = semantic_check_tool_failure(content)
+                    if semantic_result is True:
+                        last_tool_error = step
+                        last_tool_content = content
+                    else:
+                        last_tool_error = None
+                        last_tool_content = content
                 else:
                     last_tool_error = None
                     last_tool_content = content
-            else:
-                last_tool_error = None
-                last_tool_content = content
 
-            date_match = re.search(r'scheduled_for[^0-9]*(\d{4}-\d{2}-\d{2})', content)
-            if date_match:
-                last_scheduled_date = date_match.group(1)
-            date_match_alt = re.search(r'scheduled_for[^0-9]*(\d{2}[/-]\d{2}[/-]\d{4})', content)
-            if date_match_alt and not last_scheduled_date:
-                last_scheduled_date = date_match_alt.group(1)
+                date_match = re.search(r'scheduled_for[^0-9]*(\d{4}-\d{2}-\d{2})', content)
+                if date_match:
+                    last_scheduled_date = date_match.group(1)
+                date_match_alt = re.search(r'scheduled_for[^0-9]*(\d{2}[/-]\d{2}[/-]\d{4})', content)
+                if date_match_alt and not last_scheduled_date:
+                    last_scheduled_date = date_match_alt.group(1)
 
-        elif actor == "agent":
-            claims_success = any(word in content_lower for word in SUCCESS_CLAIMS)
-            RETRY_SUCCESS_CLAIMS = [
-                "retry succeeded", "retried successfully",
-                "retry was successful", "attempt succeeded",
-                "succeeded after retry", "resolved after retry"
-            ]
-            is_hallucinated_retry = any(
-                claim in content_lower for claim in RETRY_SUCCESS_CLAIMS
-            )
-
-            if last_tool_error and claims_success:
-                if not is_hallucinated_retry:
-                    failures.append({
-                        "root_cause": "contradiction",
-                        "failure_type": "hallucination",
-                        "step": step["step"],
-                        "severity": "critical",
-                        "description": "Agent claimed success after a tool failure",
-                        "evidence": content,
-                        "contradicted_by": last_tool_error["content"]
-                    })
-                    failures.append({
-                        "root_cause": "contradiction",
-                        "failure_type": "tool_misuse",
-                        "step": step["step"],
-                        "severity": "high",
-                        "description": "Agent ignored tool failure and proceeded anyway",
-                        "evidence": content,
-                        "contradicted_by": last_tool_error["content"]
-                    })
-
-            if last_tool_content and step.get("step_type") not in ["system_error", "final"]:
-                num_mismatch = detect_numerical_mismatch(
-                    last_tool_content, content, step["step"]
-                )
-                if num_mismatch:
-                    failures.append(num_mismatch)
-
-            if any(word in content_lower for word in BOOKING_CLAIMS) and step.get("step_type") in [None, "final"]:
-                booking_tool_found = any(
-                    s["actor"] == "tool" and s["step"] < step["step"]
-                    for s in steps
-                    if any(w in s["content"].lower() for w in ["book", "reserv", "confirm", "purchas"])
-                )
-                if not booking_tool_found:
-                    failures.append({
-                        "root_cause": "missing_tool_call",
-                        "failure_type": "action_skipped",
-                        "step": step["step"],
-                        "severity": "critical",
-                        "description": "Agent claimed to complete a booking/action without calling the required tool",
-                        "evidence": content
-                    })
-
-            if last_scheduled_date:
-                mentioned_dates = re.findall(r'\b(\w+\s+\d{1,2}(?:st|nd|rd|th)?)\b', content)
-                if mentioned_dates:
-                    failures.append({
-                        "root_cause": "logic_failure",
-                        "failure_type": "date_misinterpretation",
-                        "step": step["step"],
-                        "severity": "high",
-                        "description": "Tool scheduled a different date than agent confirmed to user",
-                        "evidence": content,
-                        "contradicted_by": f"Tool scheduled: {last_scheduled_date}"
-                    })
-                    last_scheduled_date = None
-
-            is_retry = any(word in content_lower for word in RETRY_WORDS)
-            if is_retry:
-                retry_count += 1
-                if retry_count >= 2:
-                    failures.append({
-                        "root_cause": "logic_failure",
-                        "failure_type": "retry_loop",
-                        "step": step["step"],
-                        "severity": "medium",
-                        "description": "Agent appears to be retrying repeatedly",
-                        "evidence": content
-                    })
+            elif actor == "agent":
+                claims_success = any(word in content_lower for word in SUCCESS_CLAIMS)
                 RETRY_SUCCESS_CLAIMS = [
                     "retry succeeded", "retried successfully",
                     "retry was successful", "attempt succeeded",
                     "succeeded after retry", "resolved after retry"
                 ]
-                if is_hallucinated_retry:
-                    retry_tool_found = any(
-                        s["actor"] == "tool"
-                        and s["step"] > last_tool_error_step
-                        and s["step"] < step["step"]
-                        for s in steps
-                    )
-                    if not retry_tool_found:
+                is_hallucinated_retry = any(
+                    claim in content_lower for claim in RETRY_SUCCESS_CLAIMS
+                )
+
+                if last_tool_error and claims_success:
+                    if not is_hallucinated_retry:
                         failures.append({
                             "root_cause": "contradiction",
-                            "failure_type": "hallucinated_retry",
+                            "failure_type": "hallucination",
                             "step": step["step"],
                             "severity": "critical",
-                            "description": "Agent claimed retry succeeded but no retry tool call exists after the error",
+                            "description": "Agent claimed success after a tool failure",
                             "evidence": content,
-                            "contradicted_by": last_tool_error["content"] if last_tool_error else "No retry tool call found"
+                            "contradicted_by": last_tool_error["content"]
                         })
-            else:
-                retry_count = 0
+                        failures.append({
+                            "root_cause": "contradiction",
+                            "failure_type": "tool_misuse",
+                            "step": step["step"],
+                            "severity": "high",
+                            "description": "Agent ignored tool failure and proceeded anyway",
+                            "evidence": content,
+                            "contradicted_by": last_tool_error["content"]
+                        })
+
+                if last_tool_content == "" and claims_success:
+                    failures.append({
+                        "root_cause": "missing_tool_call",
+                        "failure_type": "action_skipped",
+                        "step": step["step"],
+                        "severity": "critical",
+                        "description": "Agent gave confident answer but preceding tool returned no output",
+                        "evidence": content
+                    })
+
+                if last_tool_content and step.get("step_type") not in ["system_error", "final"]:
+                    num_mismatch = detect_numerical_mismatch(
+                        last_tool_content, content, step["step"]
+
+                    )
+                    if num_mismatch:
+                        failures.append(num_mismatch)
+
+                if any(word in content_lower for word in BOOKING_CLAIMS) and step.get("step_type") in [None, "final"]:
+                    booking_tool_found = any(
+                        s["actor"] == "tool" and s["step"] < step["step"]
+                        for s in steps
+                        if any(w in s["content"].lower() for w in ["book", "reserv", "confirm", "purchas"])
+                    )
+                    if not booking_tool_found:
+                        failures.append({
+                            "root_cause": "missing_tool_call",
+                            "failure_type": "action_skipped",
+                            "step": step["step"],
+                            "severity": "critical",
+                            "description": "Agent claimed to complete a booking/action without calling the required tool",
+                            "evidence": content
+                        })
+
+                if last_scheduled_date:
+                    mentioned_dates = re.findall(r'\b(\w+\s+\d{1,2}(?:st|nd|rd|th)?)\b', content)
+                    if mentioned_dates:
+                        failures.append({
+                            "root_cause": "logic_failure",
+                            "failure_type": "date_misinterpretation",
+                            "step": step["step"],
+                            "severity": "high",
+                            "description": "Tool scheduled a different date than agent confirmed to user",
+                            "evidence": content,
+                            "contradicted_by": f"Tool scheduled: {last_scheduled_date}"
+                        })
+                        last_scheduled_date = None
+
+                is_retry = any(word in content_lower for word in RETRY_WORDS)
+                if is_retry:
+                    retry_count += 1
+                    if retry_count >= 2:
+                        failures.append({
+                            "root_cause": "logic_failure",
+                            "failure_type": "retry_loop",
+                            "step": step["step"],
+                            "severity": "medium",
+                            "description": "Agent appears to be retrying repeatedly",
+                            "evidence": content
+                        })
+                    RETRY_SUCCESS_CLAIMS = [
+                        "retry succeeded", "retried successfully",
+                        "retry was successful", "attempt succeeded",
+                        "succeeded after retry", "resolved after retry"
+                    ]
+                    if is_hallucinated_retry:
+                        retry_tool_found = any(
+                            s["actor"] == "tool"
+                            and s["step"] > last_tool_error_step
+                            and s["step"] < step["step"]
+                            for s in steps
+                        )
+                        if not retry_tool_found:
+                            failures.append({
+                                "root_cause": "contradiction",
+                                "failure_type": "hallucinated_retry",
+                                "step": step["step"],
+                                "severity": "critical",
+                                "description": "Agent claimed retry succeeded but no retry tool call exists after the error",
+                                "evidence": content,
+                                "contradicted_by": last_tool_error["content"] if last_tool_error else "No retry tool call found"
+                            })
+                    else:
+                        retry_count = 0
 
     for step in steps:
         if step.get("step_type") == "system_error":
