@@ -184,6 +184,24 @@ def parse_raw_json_trace(raw_input):
         if "trace" in parsed:
             messages = parsed["trace"]
         elif "steps" in parsed:
+            first_step = parsed["steps"][0] if parsed["steps"] else {}
+            if "actor" in first_step:
+                steps = []
+                for s in parsed["steps"]:
+                    actor = s.get("actor", "").lower()
+                    if actor not in ["user", "agent", "tool"]:
+                        continue
+                    steps.append({
+                        "step": s.get("step", len(steps) + 1),
+                        "actor": actor,
+                        "content": s.get("content", ""),
+                        "duration_ms": s.get("duration_ms", None),
+                        "step_type": s.get("type", None),
+                        "step_hash": None,
+                        "status": s.get("status", "success")
+                    })
+                return steps, None
+
             messages = []
             for s in parsed["steps"]:
                 step_type = s.get("type", "")
