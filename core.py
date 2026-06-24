@@ -205,8 +205,30 @@ def detect_failures(steps):
         content = step["content"]
         content_lower = content.lower()
 
+        # NEW: catch skipped tool calls
+        if step.get("status") in ["skipped", "SKIPPED"] and actor == "tool":
+            failures.append({
+                "root_cause": "missing_tool_call",
+                "failure_type": "action_skipped",
+                "step": step["step"],
+                "severity": "critical",
+                "description": "Tool call was skipped — agent bypassed required tool execution",
+                "evidence": content or "No output"
+            })
+
         if actor == "tool":
             is_clear_error = any(word in content_lower for word in CLEAR_ERROR_WORDS)
+
+            # NEW: catch empty tool response
+            if not content.strip():
+                failures.append({
+                    "root_cause": "missing_tool_call",
+                    "failure_type": "action_skipped",
+                    "step": step["step"],
+                    "severity": "critical",
+                    "description": "Tool was called but returned empty output",
+                    "evidence": "Empty tool response"
+                })
 
             if is_clear_error:
                 last_tool_error = step
@@ -251,6 +273,17 @@ def detect_failures(steps):
                         "evidence": content,
                         "contradicted_by": last_tool_error["content"]
                     })
+
+            # NEW: catch agent answering confidently after empty tool output
+            if last_tool_content == "" and claims_success:
+                failures.append({
+                    "root_cause": "missing_tool_call",
+                    "failure_type": "action_skipped",
+                    "step": step["step"],
+                    "severity": "critical",
+                    "description": "Agent gave a confident answer but the preceding tool returned no output",
+                    "evidence": content
+                })
 
             if last_tool_content and step.get("step_type") not in ["system_error", "final"]:
                 num_mismatch = detect_numerical_mismatch(
