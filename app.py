@@ -1429,10 +1429,15 @@ if st.button("Analyze Trace", type="primary"):
                 elif raw.startswith("```"):
                     raw = raw.replace("```", "").strip()
                 raw = re.sub(r':\s*unknown\b', ': "unknown"', raw)
-                raw = raw.replace("'", '"')
 
                 try:
-                    parsed = json.loads(raw)
+                    import re as _re
+                    clean_raw = _re.sub(
+                        r'"score_breakdown"\s*:\s*\{[^}]*\}',
+                        f'"score_breakdown": {json.dumps(breakdown)}',
+                        raw
+                    )
+                    parsed = json.loads(clean_raw)
 
                     gpt_failures = parsed.get("failures", [])
                     layer1_types = [f.get("failure_type") for f in all_failures]
