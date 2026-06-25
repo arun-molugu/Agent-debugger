@@ -820,11 +820,10 @@ def detect_failures(steps):
             is_clear_error = any(word in content_lower for word in CLEAR_ERROR_WORDS)
             is_ambiguous = any(signal in content_lower for signal in AMBIGUOUS_SIGNALS)
 
-            already_flagged = any(
+            if not content.strip() and not any(
                 f["step"] == step["step"] and f["failure_type"] == "action_skipped"
                 for f in failures
-            )
-            if not content.strip():
+            ):
                 failures.append({
                     "root_cause": "missing_tool_call",
                     "failure_type": "action_skipped",
