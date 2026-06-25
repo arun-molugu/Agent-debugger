@@ -1429,6 +1429,7 @@ if st.button("Analyze Trace", type="primary"):
                 elif raw.startswith("```"):
                     raw = raw.replace("```", "").strip()
                 raw = re.sub(r':\s*unknown\b', ': "unknown"', raw)
+                raw = raw.replace("'", '"')
 
                 try:
                     parsed = json.loads(raw)
