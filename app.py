@@ -1009,6 +1009,24 @@ def detect_failures(steps):
     unverifiable = detect_unverifiable_assertions(steps)
     failures.extend(unverifiable)
 
+    agent_contents = [
+        s["content"].strip().lower()
+        for s in steps
+        if s["actor"] == "agent"
+    ]
+    if len(agent_contents) >= 4:
+        for i in range(2, len(agent_contents)):
+            if agent_contents[i] == agent_contents[i - 2]:
+                failures.append({
+                    "root_cause": "logic_failure",
+                    "failure_type": "oscillation_loop",
+                    "step": steps[i]["step"],
+                    "severity": "critical",
+                    "description": "Agent is producing identical outputs in alternating steps — convergence failure detected. Workflow is stuck in an oscillation loop with no exit condition.",
+                    "evidence": agent_contents[i][:300]
+                })
+                break
+
     return failures
 
 
