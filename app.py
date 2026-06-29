@@ -7,7 +7,7 @@ from openai import OpenAI
 st.set_page_config(page_title="Agent Debugger", page_icon="🔍", layout="wide")
 
 st.title("🔍 Agent Debugger")
-st.write("Paste broken agent logs, terminal output, LangChain/CrewAI traces, or just describe what went wrong. Get root cause + exact fix in seconds.")
+st.write("No instrumentation required. Paste any agent trace — LangChain, LangGraph, CrewAI, AutoGen — and get a reliability score, root cause, and exact fix in 30 seconds.")
 
 # ─────────────────────────────────────────
 # API KEY FROM BACKEND
