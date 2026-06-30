@@ -1036,6 +1036,39 @@ def detect_failures(steps):
                 "description": "Agent answered a query requiring real-time or external data without calling any tool",
                 "evidence": agent_steps[0]["content"][:300]
             })
+
+    # GOAL_ABANDONMENT DETECTION
+    INCOMPLETE_SIGNALS = [
+        "i'll continue", "let me proceed", "next i will", "i need to",
+        "i should now", "moving on to", "let's proceed", "i will now"
+    ]
+    COMPLETION_SIGNALS = [
+        "task complete", "all done", "finished", "completed successfully",
+        "here is the final", "here's the final", "in summary", "to summarize",
+        "is confirmed", "is complete", "is ready", "successfully"
+    ]
+
+    if tool_steps and agent_steps:
+        last_agent_step = agent_steps[-1]
+        last_agent_content = last_agent_step["content"].lower()
+
+        shows_incomplete_intent = any(
+            sig in last_agent_content for sig in INCOMPLETE_SIGNALS
+        )
+        shows_completion = any(
+            sig in last_agent_content for sig in COMPLETION_SIGNALS
+        )
+
+        if shows_incomplete_intent and not shows_completion:
+            failures.append({
+                "root_cause": "logic_failure",
+                "failure_type": "goal_abandonment",
+                "step": last_agent_step["step"],
+                "severity": "high",
+                "description": "Agent's final step indicates intent to continue working but no further steps exist — task likely abandoned before completion",
+                "evidence": last_agent_content[:300]
+            })
+            
     # OSCILLATION LOOP DETECTION
     agent_contents = [
         s["content"].strip().lower()
