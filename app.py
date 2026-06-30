@@ -1036,7 +1036,6 @@ def detect_failures(steps):
                 "description": "Agent answered a query requiring real-time or external data without calling any tool",
                 "evidence": agent_steps[0]["content"][:300]
             })
-    
     # OSCILLATION LOOP DETECTION
     agent_contents = [
         s["content"].strip().lower()
