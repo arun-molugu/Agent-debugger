@@ -1068,7 +1068,7 @@ def detect_failures(steps):
                 "description": "Agent's final step indicates intent to continue working but no further steps exist — task likely abandoned before completion",
                 "evidence": last_agent_content[:300]
             })
-            
+
     # OSCILLATION LOOP DETECTION
     agent_contents = [
         s["content"].strip().lower()
