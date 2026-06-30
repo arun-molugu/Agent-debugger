@@ -1009,6 +1009,35 @@ def detect_failures(steps):
     unverifiable = detect_unverifiable_assertions(steps)
     failures.extend(unverifiable)
 
+    # TOOL_AVOIDANCE DETECTION
+    tool_steps = [s for s in steps if s["actor"] == "tool"]
+    agent_steps = [s for s in steps if s["actor"] == "agent"]
+    user_steps = [s for s in steps if s["actor"] == "user"]
+
+    TOOL_REQUIRED_SIGNALS = [
+        "current", "latest", "today", "now", "price", "weather",
+        "stock", "news", "live", "real-time", "search", "find",
+        "look up", "check", "retrieve", "fetch", "get me", "what is the",
+        "how much", "how many", "when is", "where is", "who is"
+    ]
+
+    if not tool_steps and agent_steps and user_steps:
+        user_content = " ".join(s["content"].lower() for s in user_steps)
+        agent_content = " ".join(s["content"].lower() for s in agent_steps)
+        requires_tool = any(signal in user_content for signal in TOOL_REQUIRED_SIGNALS)
+        claims_answer = any(word in agent_content for word in SUCCESS_CLAIMS + ["is $", "is currently", "the price", "the weather", "the answer"])
+
+        if requires_tool and claims_answer:
+            failures.append({
+                "root_cause": "missing_tool_call",
+                "failure_type": "tool_avoidance",
+                "step": agent_steps[0]["step"],
+                "severity": "critical",
+                "description": "Agent answered a query requiring real-time or external data without calling any tool",
+                "evidence": agent_steps[0]["content"][:300]
+            })
+    
+    # OSCILLATION LOOP DETECTION
     agent_contents = [
         s["content"].strip().lower()
         for s in steps
