@@ -1045,7 +1045,6 @@ def detect_failures(steps):
     COMPLETION_SIGNALS = [
         "task complete", "all done", "finished", "completed successfully",
         "here is the final", "here's the final", "in summary", "to summarize",
-        "is confirmed", "is complete", "is ready", "successfully"
     ]
 
     if tool_steps and agent_steps:
